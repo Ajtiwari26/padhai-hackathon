@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JSXGraph - Projectile Motion</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsxgraph@1.6.2/distrib/jsxgraph.css">
+  <script src="https://cdn.jsdelivr.net/npm/jsxgraph@1.6.2/distrib/jsxgraphcore.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      background: #0b1326;
+      font-family: 'Lexend', -apple-system, sans-serif;
+      color: #dae2fd;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .header h1 {
+      font-size: 32px;
+      margin: 0 0 10px 0;
+      color: #6366F1;
+    }
+    .header p {
+      font-size: 14px;
+      color: #818CF8;
+      margin: 5px 0;
+    }
+    .diagram-container {
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(20px);
+      border-radius: 16px;
+      padding: 30px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      margin-bottom: 30px;
+    }
+    #jxgbox {
+      width: 100%;
+      height: 600px;
+      background: rgba(11, 19, 38, 0.5);
+      border-radius: 12px;
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      margin-top: 20px;
+    }
+    .control-group {
+      background: rgba(99, 102, 241, 0.1);
+      padding: 15px;
+      border-radius: 8px;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+    }
+    .control-group h3 {
+      color: #6366F1;
+      font-size: 14px;
+      margin: 0 0 10px 0;
+    }
+    .control-group p {
+      margin: 5px 0;
+      font-size: 13px;
+      color: #dae2fd;
+    }
+    .control-group strong {
+      color: #2DD4BF;
+    }
+    .footer {
+      text-align: center;
+      margin-top: 30px;
+      color: #818CF8;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🚀 JSXGraph Test</h1>
+      <p>IIT-JEE Level Projectile Motion</p>
+      <p><strong>Interactive Physics</strong> - Blackboard style diagrams</p>
+    </div>
+
+    <div class="diagram-container">
+      <div id="jxgbox"></div>
+      
+      <div class="controls">
+        <div class="control-group">
+          <h3>📊 Initial Conditions</h3>
+          <p><strong>Velocity (v₀):</strong> 25 m/s</p>
+          <p><strong>Angle (θ):</strong> 45°</p>
+          <p><strong>Gravity (g):</strong> 9.8 m/s²</p>
+        </div>
+        
+        <div class="control-group">
+          <h3>📐 Calculated Values</h3>
+          <p><strong>Max Height:</strong> <span id="maxHeight">-</span> m</p>
+          <p><strong>Range:</strong> <span id="range">-</span> m</p>
+          <p><strong>Time of Flight:</strong> <span id="timeOfFlight">-</span> s</p>
+        </div>
+        
+        <div class="control-group">
+          <h3>🎯 Components</h3>
+          <p><strong>vₓ:</strong> <span id="vx">-</span> m/s</p>
+          <p><strong>vᵧ:</strong> <span id="vy">-</span> m/s</p>
+          <p><strong>v:</strong> <span id="v">-</span> m/s</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>✨ Best for: Mechanics, vectors, coordinate geometry, interactive graphs</p>
+      <p>💡 Why: IIT-JEE level physics needs blackboard-style diagrams!</p>
+      <p>🎮 Drag the projectile point to see trajectory change</p>
+    </div>
+  </div>
+
+  <script>
+    // Initial conditions
+    const v0 = 25;  // m/s
+    const angle = 45;  // degrees
+    const g = 9.8;  // m/s²
+    
+    // Calculate components
+    const vx = v0 * Math.cos(angle * Math.PI / 180);
+    const vy = v0 * Math.sin(angle * Math.PI / 180);
+    
+    // Calculate trajectory parameters
+    const maxHeight = (vy * vy) / (2 * g);
+    const timeOfFlight = (2 * vy) / g;
+    const range = (v0 * v0 * Math.sin(2 * angle * Math.PI / 180)) / g;
+    
+    // Update display
+    document.getElementById('maxHeight').textContent = maxHeight.toFixed(2);
+    document.getElementById('range').textContent = range.toFixed(2);
+    document.getElementById('timeOfFlight').textContent = timeOfFlight.toFixed(2);
+    document.getElementById('vx').textContent = vx.toFixed(2);
+    document.getElementById('vy').textContent = vy.toFixed(2);
+    document.getElementById('v').textContent = v0.toFixed(2);
+
+    // Create board
+    const board = JXG.JSXGraph.initBoard('jxgbox', {
+      boundingbox: [-5, 35, 70, -5],
+      axis: true,
+      showCopyright: false,
+      showNavigation: true,
+      grid: true,
+      defaultAxes: {
+        x: {
+          name: 'Distance (m)',
+          withLabel: true,
+          label: {
+            position: 'rt',
+            offset: [-20, 20],
+            cssStyle: 'color: #dae2fd; font-family: Lexend; font-size: 14px;'
+          },
+          strokeColor: '#6366F1',
+          strokeWidth: 2,
+          ticks: {
+            strokeColor: '#8083ff',
+            strokeWidth: 1,
+            label: {
+              cssStyle: 'color: #dae2fd; font-family: Lexend; font-size: 12px;'
+            }
+          }
+        },
+        y: {
+          name: 'Height (m)',
+          withLabel: true,
+          label: {
+            position: 'rt',
+            offset: [10, -10],
+            cssStyle: 'color: #dae2fd; font-family: Lexend; font-size: 14px;'
+          },
+          strokeColor: '#6366F1',
+          strokeWidth: 2,
+          ticks: {
+            strokeColor: '#8083ff',
+            strokeWidth: 1,
+            label: {
+              cssStyle: 'color: #dae2fd; font-family: Lexend; font-size: 12px;'
+            }
+          }
+        }
+      }
+    });
+
+    // Launch point
+    const origin = board.create('point', [0, 0], {
+      name: 'Launch Point',
+      size: 5,
+      fillColor: '#2DD4BF',
+      strokeColor: '#2DD4BF',
+      fixed: true,
+      label: {
+        cssStyle: 'color: #2DD4BF; font-family: Lexend; font-size: 13px;'
+      }
+    });
+
+    // Velocity vector
+    const velocityVector = board.create('arrow', [[0, 0], [vx/1.5, vy/1.5]], {
+      strokeColor: '#6366F1',
+      strokeWidth: 3,
+      lastArrow: {type: 2, size: 10}
+    });
+
+    board.create('text', [vx/1.5 + 2, vy/1.5 + 1, 'v₀ = 25 m/s'], {
+      fontSize: 14,
+      color: '#6366F1',
+      cssStyle: 'font-family: Lexend;'
+    });
+
+    // Trajectory
+    const trajectory = board.create('functiongraph', [
+      function(x) {
+        if (x < 0 || x > range) return null;
+        const y = x * Math.tan(angle * Math.PI / 180) - (g * x * x) / (2 * vx * vx);
+        return y < 0 ? 0 : y;
+      }
+    ], {
+      strokeColor: '#2DD4BF',
+      strokeWidth: 4,
+      highlight: false
+    });
+
+    // Maximum height point
+    const maxHeightX = range / 2;
+    const maxPoint = board.create('point', [maxHeightX, maxHeight], {
+      name: 'Max Height',
+      size: 4,
+      fillColor: '#818CF8',
+      strokeColor: '#818CF8',
+      label: {
+        cssStyle: 'color: #818CF8; font-family: Lexend; font-size: 13px;'
+      }
+    });
+
+    // Dashed line to max height
+    board.create('segment', [[maxHeightX, 0], maxPoint], {
+      strokeColor: '#818CF8',
+      strokeWidth: 2,
+      dash: 2
+    });
+
+    // Range point
+    const rangePoint = board.create('point', [range, 0], {
+      name: 'Range',
+      size: 4,
+      fillColor: '#2DD4BF',
+      strokeColor: '#2DD4BF',
+      label: {
+        cssStyle: 'color: #2DD4BF; font-family: Lexend; font-size: 13px;'
+      }
+    });
+
+    // Horizontal component vector
+    board.create('arrow', [[0, -2], [vx/1.5, -2]], {
+      strokeColor: '#818CF8',
+      strokeWidth: 2,
+      lastArrow: {type: 2, size: 8}
+    });
+    board.create('text', [vx/3, -3.5, 'vₓ = ' + vx.toFixed(1) + ' m/s'], {
+      fontSize: 12,
+      color: '#818CF8',
+      cssStyle: 'font-family: Lexend;'
+    });
+
+    // Vertical component vector
+    board.create('arrow', [[-2, 0], [-2, vy/1.5]], {
+      strokeColor: '#818CF8',
+      strokeWidth: 2,
+      lastArrow: {type: 2, size: 8}
+    });
+    board.create('text', [-4, vy/3, 'vᵧ = ' + vy.toFixed(1) + ' m/s'], {
+      fontSize: 12,
+      color: '#818CF8',
+      cssStyle: 'font-family: Lexend;'
+    });
+
+    // Angle arc
+    const angleArc = board.create('angle', [
+      [vx/1.5, 0],
+      [0, 0],
+      [vx/1.5, vy/1.5]
+    ], {
+      radius: 3,
+      fillColor: '#6366F1',
+      strokeColor: '#6366F1',
+      fillOpacity: 0.3,
+      label: {
+        cssStyle: 'color: #6366F1; font-family: Lexend; font-size: 12px;'
+      }
+    });
+
+    // Ground line
+    board.create('segment', [[-5, 0], [range + 5, 0]], {
+      strokeColor: '#2DD4BF',
+      strokeWidth: 3,
+      dash: 1
+    });
+
+    // Formulas text
+    board.create('text', [5, 30, 'Equations:'], {
+      fontSize: 14,
+      color: '#dae2fd',
+      cssStyle: 'font-family: Lexend; font-weight: bold;'
+    });
+    board.create('text', [5, 27, 'H = v₀²sin²θ / 2g'], {
+      fontSize: 12,
+      color: '#818CF8',
+      cssStyle: 'font-family: Lexend;'
+    });
+    board.create('text', [5, 24, 'R = v₀²sin2θ / g'], {
+      fontSize: 12,
+      color: '#2DD4BF',
+      cssStyle: 'font-family: Lexend;'
+    });
+    board.create('text', [5, 21, 'T = 2v₀sinθ / g'], {
+      fontSize: 12,
+      color: '#6366F1',
+      cssStyle: 'font-family: Lexend;'
+    });
+  </script>
+</body>
+</html>

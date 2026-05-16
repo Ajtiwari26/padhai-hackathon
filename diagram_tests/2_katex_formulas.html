@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KaTeX - Physics Formulas</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 40px;
+      background: #0b1326;
+      font-family: 'Lexend', -apple-system, sans-serif;
+      color: #dae2fd;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    .header h1 {
+      font-size: 32px;
+      margin: 0 0 10px 0;
+      color: #6366F1;
+    }
+    .header p {
+      font-size: 14px;
+      color: #818CF8;
+      margin: 5px 0;
+    }
+    .formula-card {
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(20px);
+      border-radius: 16px;
+      padding: 30px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      margin-bottom: 30px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    }
+    .formula-card h2 {
+      color: #2DD4BF;
+      font-size: 20px;
+      margin: 0 0 20px 0;
+      border-bottom: 2px solid rgba(45, 212, 191, 0.3);
+      padding-bottom: 10px;
+    }
+    .katex {
+      font-size: 1.4em;
+      color: #dae2fd;
+    }
+    .katex-display {
+      margin: 25px 0;
+      padding: 20px;
+      background: rgba(99, 102, 241, 0.05);
+      border-radius: 12px;
+      border-left: 4px solid #6366F1;
+    }
+    .variables {
+      margin-top: 20px;
+      padding: 15px;
+      background: rgba(129, 140, 248, 0.1);
+      border-radius: 8px;
+      border: 1px solid rgba(129, 140, 248, 0.3);
+    }
+    .variables h3 {
+      color: #818CF8;
+      font-size: 14px;
+      margin: 0 0 10px 0;
+    }
+    .variables p {
+      margin: 5px 0;
+      font-size: 14px;
+      line-height: 1.8;
+    }
+    .footer {
+      text-align: center;
+      margin-top: 40px;
+      color: #818CF8;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>📐 KaTeX Test</h1>
+    <p>IIT-JEE Physics & Math Formulas</p>
+    <p><strong>Absolute Must</strong> - Makes numericals readable and beautiful</p>
+  </div>
+
+  <div class="formula-card">
+    <h2>🚀 Escape Velocity</h2>
+    <div class="formula">
+      $$
+      v_{escape} = \sqrt{\frac{2GM}{R}}
+      $$
+    </div>
+    <div class="variables">
+      <h3>जहाँ:</h3>
+      <p>$v_{escape}$ = Escape velocity (पलायन वेग)</p>
+      <p>$G$ = Gravitational constant = $6.67 \times 10^{-11}$ N·m²/kg²</p>
+      <p>$M$ = Mass of planet (ग्रह का द्रव्यमान)</p>
+      <p>$R$ = Radius of planet (ग्रह की त्रिज्या)</p>
+    </div>
+    <div class="variables">
+      <h3>Derivation:</h3>
+      <p>Energy Conservation से:</p>
+      $$
+      \frac{1}{2}mv^2 = \frac{GMm}{R}
+      $$
+      $$
+      v = \sqrt{\frac{2GM}{R}}
+      $$
+    </div>
+  </div>
+
+  <div class="formula-card">
+    <h2>⚡ Kinetic Energy</h2>
+    <div class="formula">
+      $$
+      KE = \frac{1}{2}mv^2
+      $$
+    </div>
+    <div class="variables">
+      <h3>Work-Energy Theorem:</h3>
+      $$
+      W = \Delta KE = KE_f - KE_i
+      $$
+      <p>$W$ = Work done (कार्य)</p>
+      <p>$m$ = Mass (द्रव्यमान) in kg</p>
+      <p>$v$ = Velocity (वेग) in m/s</p>
+      <p>$KE$ = Kinetic Energy in Joules</p>
+    </div>
+  </div>
+
+  <div class="formula-card">
+    <h2>📊 Quadratic Formula</h2>
+    <div class="formula">
+      $$
+      x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+      $$
+    </div>
+    <div class="variables">
+      <h3>For equation: $ax^2 + bx + c = 0$</h3>
+      <p><strong>Discriminant:</strong> $\Delta = b^2 - 4ac$</p>
+      <p>• $\Delta > 0$ → दो real और distinct roots</p>
+      <p>• $\Delta = 0$ → एक repeated root</p>
+      <p>• $\Delta < 0$ → दो complex roots</p>
+    </div>
+  </div>
+
+  <div class="formula-card">
+    <h2>🌊 Wave Equation</h2>
+    <div class="formula">
+      $$
+      v = f\lambda = \frac{\omega}{k}
+      $$
+    </div>
+    <div class="variables">
+      <h3>Wave Properties:</h3>
+      <p>$v$ = Wave velocity (तरंग वेग)</p>
+      <p>$f$ = Frequency (आवृत्ति) in Hz</p>
+      <p>$\lambda$ = Wavelength (तरंगदैर्ध्य) in meters</p>
+      <p>$\omega$ = Angular frequency = $2\pi f$</p>
+      <p>$k$ = Wave number = $\frac{2\pi}{\lambda}$</p>
+    </div>
+  </div>
+
+  <div class="formula-card">
+    <h2>🔋 Ohm's Law & Power</h2>
+    <div class="formula">
+      $$
+      V = IR
+      $$
+      $$
+      P = VI = I^2R = \frac{V^2}{R}
+      $$
+    </div>
+    <div class="variables">
+      <h3>Electrical Quantities:</h3>
+      <p>$V$ = Voltage (वोल्टेज) in Volts</p>
+      <p>$I$ = Current (धारा) in Amperes</p>
+      <p>$R$ = Resistance (प्रतिरोध) in Ohms (Ω)</p>
+      <p>$P$ = Power (शक्ति) in Watts</p>
+    </div>
+  </div>
+
+  <div class="footer">
+    <p>✨ Best for: Math equations, physics formulas, chemical equations</p>
+    <p>💡 Why: Makes numericals readable - essential for IIT-JEE preparation!</p>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      renderMathInElement(document.body, {
+        delimiters: [
+          {left: "$$", right: "$$", display: true},
+          {left: "$", right: "$", display: false},
+          {left: "\\[", right: "\\]", display: true},
+          {left: "\\(", right: "\\)", display: false}
+        ],
+        throwOnError: false
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Raw SVG - Biology Diagrams</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 40px;
+      background: #0b1326;
+      font-family: 'Lexend', -apple-system, sans-serif;
+      color: #dae2fd;
+    }
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    .header h1 {
+      font-size: 32px;
+      margin: 0 0 10px 0;
+      color: #6366F1;
+    }
+    .header p {
+      font-size: 14px;
+      color: #818CF8;
+      margin: 5px 0;
+    }
+    .diagrams-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+      gap: 30px;
+      margin-bottom: 30px;
+    }
+    .diagram-card {
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(20px);
+      border-radius: 16px;
+      padding: 30px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    }
+    .diagram-card h2 {
+      color: #2DD4BF;
+      font-size: 20px;
+      margin: 0 0 20px 0;
+      text-align: center;
+      border-bottom: 2px solid rgba(45, 212, 191, 0.3);
+      padding-bottom: 10px;
+    }
+    .svg-container {
+      background: rgba(11, 19, 38, 0.5);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 15px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    svg {
+      max-width: 100%;
+      height: auto;
+    }
+    svg text {
+      font-family: 'Lexend', -apple-system, sans-serif;
+    }
+    .info {
+      background: rgba(129, 140, 248, 0.1);
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(129, 140, 248, 0.3);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .info p {
+      margin: 5px 0;
+    }
+    .footer {
+      text-align: center;
+      margin-top: 40px;
+      color: #818CF8;
+      font-size: 12px;
+      padding: 20px;
+      background: rgba(99, 102, 241, 0.05);
+      border-radius: 12px;
+      border: 1px solid rgba(99, 102, 241, 0.2);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🔬 Raw SVG Test</h1>
+      <p>Biology Diagrams - Direct SVG Rendering</p>
+      <p><strong>Fastest Approach</strong> - No external library needed</p>
+    </div>
+
+    <div class="diagrams-grid">
+      <!-- Animal Cell -->
+      <div class="diagram-card">
+        <h2>Animal Cell (जंतु कोशिका)</h2>
+        <div class="svg-container">
+          <svg width="600" height="400" viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
+            <!-- Cell Membrane -->
+            <ellipse cx="300" cy="200" rx="250" ry="150" 
+              fill="rgba(99, 102, 241, 0.05)" 
+              stroke="#6366F1" 
+              stroke-width="3"/>
+            
+            <!-- Nucleus -->
+            <circle cx="300" cy="200" r="60" 
+              fill="rgba(45, 212, 191, 0.15)" 
+              stroke="#2DD4BF" 
+              stroke-width="2"/>
+            <text x="300" y="205" text-anchor="middle" font-size="14" fill="#dae2fd" font-weight="600">
+              Nucleus
+            </text>
+            
+            <!-- Mitochondria -->
+            <ellipse cx="180" cy="150" rx="40" ry="25" 
+              fill="rgba(129, 140, 248, 0.15)" 
+              stroke="#818CF8" 
+              stroke-width="2"/>
+            <path d="M 160 150 Q 170 145 180 150 T 200 150" 
+              stroke="#818CF8" 
+              stroke-width="1" 
+              fill="none"/>
+            <text x="180" y="190" text-anchor="middle" font-size="12" fill="#dae2fd">
+              Mitochondria
+            </text>
+            
+            <!-- Ribosome -->
+            <circle cx="380" cy="180" r="8" fill="#6366F1"/>
+            <circle cx="395" cy="185" r="8" fill="#6366F1"/>
+            <circle cx="410" cy="175" r="8" fill="#6366F1"/>
+            <text x="395" y="210" text-anchor="middle" font-size="10" fill="#dae2fd">
+              Ribosomes
+            </text>
+            
+            <!-- Endoplasmic Reticulum -->
+            <path d="M 150 250 Q 200 230 250 250 T 350 250" 
+              stroke="#2DD4BF" 
+              stroke-width="2" 
+              fill="none"/>
+            <path d="M 150 260 Q 200 240 250 260 T 350 260" 
+              stroke="#2DD4BF" 
+              stroke-width="2" 
+              fill="none"/>
+            <text x="250" y="285" text-anchor="middle" font-size="12" fill="#dae2fd">
+              Endoplasmic Reticulum
+            </text>
+            
+            <!-- Golgi Apparatus -->
+            <g>
+              <line x1="420" y1="240" x2="470" y2="240" stroke="#818CF8" stroke-width="2"/>
+              <line x1="420" y1="250" x2="470" y2="250" stroke="#818CF8" stroke-width="2"/>
+              <line x1="420" y1="260" x2="470" y2="260" stroke="#818CF8" stroke-width="2"/>
+              <line x1="420" y1="270" x2="470" y2="270" stroke="#818CF8" stroke-width="2"/>
+              <text x="445" y="295" text-anchor="middle" font-size="12" fill="#dae2fd">
+                Golgi
+              </text>
+            </g>
+            
+            <!-- Lysosome -->
+            <circle cx="200" cy="280" r="15" 
+              fill="rgba(239, 68, 68, 0.15)" 
+              stroke="#ef4444" 
+              stroke-width="2"/>
+            <text x="200" y="315" text-anchor="middle" font-size="10" fill="#dae2fd">
+              Lysosome
+            </text>
+            
+            <!-- Cytoplasm label -->
+            <text x="500" y="100" font-size="12" fill="#dae2fd" font-style="italic">
+              Cytoplasm
+            </text>
+          </svg>
+        </div>
+        <div class="info">
+          <p><strong>Components:</strong> Nucleus, Mitochondria, ER, Golgi, Ribosomes, Lysosome</p>
+          <p><strong>Key:</strong> No cell wall, has centrioles</p>
+          <p><strong>Function:</strong> Eukaryotic cell structure</p>
+        </div>
+      </div>
+
+      <!-- Neuron -->
+      <div class="diagram-card">
+        <h2>Neuron (तंत्रिका कोशिका)</h2>
+        <div class="svg-container">
+          <svg width="700" height="300" viewBox="0 0 700 300" xmlns="http://www.w3.org/2000/svg">
+            <!-- Cell Body (Soma) -->
+            <circle cx="200" cy="150" r="50" 
+              fill="rgba(99, 102, 241, 0.15)" 
+              stroke="#6366F1" 
+              stroke-width="3"/>
+            <text x="200" y="155" text-anchor="middle" font-size="14" fill="#dae2fd" font-weight="600">
+              Cell Body
+            </text>
+            
+            <!-- Nucleus -->
+            <circle cx="200" cy="150" r="20" 
+              fill="rgba(45, 212, 191, 0.2)" 
+              stroke="#2DD4BF" 
+              stroke-width="2"/>
+            
+            <!-- Dendrites -->
+            <path d="M 160 120 Q 140 100 130 80" 
+              stroke="#818CF8" 
+              stroke-width="3" 
+              fill="none"/>
+            <path d="M 170 110 Q 160 90 155 70" 
+              stroke="#818CF8" 
+              stroke-width="3" 
+              fill="none"/>
+            <path d="M 160 180 Q 140 200 130 220" 
+              stroke="#818CF8" 
+              stroke-width="3" 
+              fill="none"/>
+            <path d="M 170 190 Q 160 210 155 230" 
+              stroke="#818CF8" 
+              stroke-width="3" 
+              fill="none"/>
+            <text x="120" y="60" font-size="12" fill="#dae2fd">
+              Dendrites
+            </text>
+            
+            <!-- Axon -->
+            <line x1="250" y1="150" x2="550" y2="150" 
+              stroke="#2DD4BF" 
+              stroke-width="8"/>
+            
+            <!-- Myelin Sheath -->
+            <rect x="280" y="135" width="50" height="30" 
+              fill="rgba(129, 140, 248, 0.3)" 
+              stroke="#818CF8" 
+              stroke-width="2" 
+              rx="5"/>
+            <rect x="350" y="135" width="50" height="30" 
+              fill="rgba(129, 140, 248, 0.3)" 
+              stroke="#818CF8" 
+              stroke-width="2" 
+              rx="5"/>
+            <rect x="420" y="135" width="50" height="30" 
+              fill="rgba(129, 140, 248, 0.3)" 
+              stroke="#818CF8" 
+              stroke-width="2" 
+              rx="5"/>
+            <rect x="490" y="135" width="50" height="30" 
+              fill="rgba(129, 140, 248, 0.3)" 
+              stroke="#818CF8" 
+              stroke-width="2" 
+              rx="5"/>
+            
+            <text x="380" y="125" text-anchor="middle" font-size="12" fill="#dae2fd">
+              Myelin Sheath
+            </text>
+            
+            <!-- Axon Terminal -->
+            <circle cx="570" cy="140" r="15" 
+              fill="rgba(45, 212, 191, 0.3)" 
+              stroke="#2DD4BF" 
+              stroke-width="2"/>
+            <circle cx="580" cy="150" r="15" 
+              fill="rgba(45, 212, 191, 0.3)" 
+              stroke="#2DD4BF" 
+              stroke-width="2"/>
+            <circle cx="570" cy="160" r="15" 
+              fill="rgba(45, 212, 191, 0.3)" 
+              stroke="#2DD4BF" 
+              stroke-width="2"/>
+            
+            <text x="600" y="155" font-size="12" fill="#dae2fd">
+              Axon Terminal
+            </text>
+            
+            <!-- Axon label -->
+            <text x="400" y="180" text-anchor="middle" font-size="12" fill="#dae2fd">
+              Axon
+            </text>
+            
+            <!-- Direction arrow -->
+            <defs>
+              <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                <polygon points="0 0, 10 3, 0 6" fill="#6366F1"/>
+              </marker>
+            </defs>
+            <path d="M 260 170 L 540 170" 
+              stroke="#6366F1" 
+              stroke-width="2" 
+              fill="none" 
+              marker-end="url(#arrowhead)"/>
+            <text x="400" y="195" text-anchor="middle" font-size="11" fill="#6366F1">
+              Signal Direction →
+            </text>
+          </svg>
+        </div>
+        <div class="info">
+          <p><strong>Parts:</strong> Dendrites (receive), Cell body, Axon (transmit), Terminals</p>
+          <p><strong>Myelin:</strong> Insulation for faster signal transmission</p>
+          <p><strong>Function:</strong> Electrical signal transmission in nervous system</p>
+        </div>
+      </div>
+
+      <!-- Human Heart -->
+      <div class="diagram-card">
+        <h2>Human Heart (मानव हृदय)</h2>
+        <div class="svg-container">
+          <svg width="500" height="500" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg">
+            <!-- Right Atrium -->
+            <path d="M 200 150 Q 180 180 200 210 L 240 210 L 240 150 Z" 
+              fill="rgba(239, 68, 68, 0.2)" 
+              stroke="#ef4444" 
+              stroke-width="2"/>
+            <text x="215" y="185" text-anchor="middle" font-size="12" fill="#dae2fd" font-weight="600">
+              Right
+            </text>
+            <text x="215" y="198" text-anchor="middle" font-size="12" fill="#dae2fd" font-weight="600">
+              Atrium
+            </text>
+            
+            <!-- Left Atrium -->
+            <path d="M 260 150 L 260 210 L 300 210 Q 320 180 300 150 Z" 
+              fill="rgba(239, 68, 68, 0.3)" 
+              stroke="#ef4444" 
+              stroke-width="2"/>
+            <text x="285" y="185" text-anchor="middle" font-size="12" fill="#dae2fd" font-weight="600">
+              Left
+            </text>
+            <text x="285" y="198" text-anchor="middle" font-size="12" fill="#dae2fd" font-weight="600">
+              Atrium
+            </text>
+            
+            <!-- Right Ventricle -->
+            <path d="M 200 220 L 240 220 L 230 320 Q 220 340 200 320 Z" 
+              fill="rgba(239, 68, 68, 0.25)" 
+              stroke="#ef4444" 
+              stroke-width="3"/>
+            <text x="218" y="270" text-anchor="middle" font-size="12" fill="#dae2fd" font-weight="600">
+              Right
+            </text>
+            <text x="218" y="285" text-anchor="middle" font-size="12" fill="#dae2fd" font-weight="600">
+              Ventricle
+            </text>
+            
+            <!-- Left Ventricle -->
+            <path d="M 260 220 L 300 220 L 300 320 Q 280 340 270 320 Z" 
+              fill="rgba(239, 68, 68, 0.35)" 
+              stroke="#ef4444" 
+              stroke-width="3"/>
+            <text x="282" y="270" text-anchor="middle" font-size="12" fill="#dae2fd" font-weight="600">
+              Left
+            </text>
+            <text x="282" y="285" text-anchor="middle" font-size="12" fill="#dae2fd" font-weight="600">
+              Ventricle
+            </text>
+            
+            <!-- Septum -->
+            <line x1="250" y1="150" x2="250" y2="330" 
+              stroke="#6366F1" 
+              stroke-width="3" 
+              stroke-dasharray="5,5"/>
+            <text x="255" y="240" font-size="10" fill="#6366F1">
+              Septum
+            </text>
+            
+            <!-- Valves -->
+            <ellipse cx="220" cy="215" rx="15" ry="5" 
+              fill="#2DD4BF" 
+              stroke="#2DD4BF" 
+              stroke-width="2"/>
+            <ellipse cx="280" cy="215" rx="15" ry="5" 
+              fill="#2DD4BF" 
+              stroke="#2DD4BF" 
+              stroke-width="2"/>
+            
+            <!-- Aorta -->
+            <path d="M 290 150 Q 300 120 320 110 L 340 110" 
+              stroke="#ef4444" 
+              stroke-width="6" 
+              fill="none"/>
+            <text x="330" y="100" font-size="11" fill="#dae2fd" font-weight="600">
+              Aorta
+            </text>
+            
+            <!-- Pulmonary Artery -->
+            <path d="M 220 150 Q 210 120 190 110 L 170 110" 
+              stroke="#6366F1" 
+              stroke-width="5" 
+              fill="none"/>
+            <text x="140" y="100" font-size="10" fill="#dae2fd">
+              Pulmonary
+            </text>
+            <text x="145" y="112" font-size="10" fill="#dae2fd">
+              Artery
+            </text>
+            
+            <!-- Vena Cava -->
+            <path d="M 200 160 L 160 160 L 160 140" 
+              stroke="#6366F1" 
+              stroke-width="5" 
+              fill="none"/>
+            <text x="120" y="155" font-size="10" fill="#dae2fd">
+              Vena Cava
+            </text>
+            
+            <!-- Pulmonary Vein -->
+            <path d="M 300 160 L 340 160 L 340 140" 
+              stroke="#ef4444" 
+              stroke-width="5" 
+              fill="none"/>
+            <text x="345" y="155" font-size="10" fill="#dae2fd">
+              Pulmonary
+            </text>
+            <text x="355" y="167" font-size="10" fill="#dae2fd">
+              Vein
+            </text>
+            
+            <!-- Legend -->
+            <rect x="150" y="370" width="200" height="80" 
+              fill="rgba(255, 255, 255, 0.05)" 
+              stroke="#6366F1" 
+              stroke-width="1" 
+              rx="8"/>
+            <text x="250" y="390" text-anchor="middle" font-size="13" fill="#dae2fd" font-weight="bold">
+              Blood Flow
+            </text>
+            <line x1="170" y1="410" x2="200" y2="410" stroke="#6366F1" stroke-width="4"/>
+            <text x="210" y="415" font-size="11" fill="#dae2fd">
+              Deoxygenated
+            </text>
+            <line x1="170" y1="430" x2="200" y2="430" stroke="#ef4444" stroke-width="4"/>
+            <text x="210" y="435" font-size="11" fill="#dae2fd">
+              Oxygenated
+            </text>
+          </svg>
+        </div>
+        <div class="info">
+          <p><strong>Chambers:</strong> 2 Atria (upper) + 2 Ventricles (lower)</p>
+          <p><strong>Septum:</strong> Divides left and right sides</p>
+          <p><strong>Flow:</strong> Blue = deoxygenated, Red = oxygenated blood</p>
+          <p><strong>Key:</strong> Left ventricle has thicker walls (pumps to whole body)</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>✨ Best for: Biology diagrams, anatomical structures, cell diagrams</p>
+      <p>💡 Why: Direct SVG rendering - fastest approach, no external library!</p>
+      <p>🎯 Perfect for NEET Biology preparation</p>
+      <p>⚡ Instant rendering - no loading time!</p>
+    </div>
+  </div>
+</body>
+</html>

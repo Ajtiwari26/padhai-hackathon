@@ -57,7 +57,7 @@ react {
 /**
  * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
  */
-def enableProguardInReleaseBuilds = false
+def enableProguardInReleaseBuilds = true
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
@@ -96,14 +96,21 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            manifestPlaceholders = [usesCleartextTraffic:"true"]
         }
         release {
             // Caution! In production, you need to generate your own keystore file.
             // see https://reactnative.dev/docs/signed-apk-android.
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
+            shrinkResources enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            manifestPlaceholders = [usesCleartextTraffic:"false"]
         }
+    }
+    kotlinOptions {
+        // LiteRT-LM SDK is compiled with Kotlin 2.3.0 metadata but RN requires Kotlin 2.1.x.
+        freeCompilerArgs += ["-Xskip-metadata-version-check"]
     }
 }
 
@@ -116,4 +123,24 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    // AndroidX Core — NotificationCompat for overlay service
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+
+    // Kotlin Coroutines
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+
+    // MediaPipe LLM Inference SDK - for legacy .task models
+    implementation 'com.google.mediapipe:tasks-genai:0.10.18'
+
+    // LiteRT-LM SDK - for new .litertlm models (Gemma 4)
+    implementation 'com.google.ai.edge.litertlm:litertlm-android:latest.release'
+
+    // NanoHTTPD for local web server
+    implementation 'org.nanohttpd:nanohttpd:2.3.1'
+
+    // Google ML Kit Text Recognition for VisionMentor
+    implementation 'com.google.mlkit:text-recognition:16.0.0'
 }

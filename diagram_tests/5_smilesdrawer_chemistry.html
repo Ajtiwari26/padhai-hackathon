@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SmilesDrawer - Organic Chemistry</title>
+  <script src="https://cdn.jsdelivr.net/npm/smiles-drawer@2.0.1/dist/smiles-drawer.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 40px;
+      background: #0b1326;
+      font-family: 'Lexend', -apple-system, sans-serif;
+      color: #dae2fd;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    .header h1 {
+      font-size: 32px;
+      margin: 0 0 10px 0;
+      color: #6366F1;
+    }
+    .header p {
+      font-size: 14px;
+      color: #818CF8;
+      margin: 5px 0;
+    }
+    .molecules-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: 30px;
+      margin-bottom: 30px;
+    }
+    .molecule-card {
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(20px);
+      border-radius: 16px;
+      padding: 25px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    }
+    .molecule-card h2 {
+      color: #2DD4BF;
+      font-size: 18px;
+      margin: 0 0 15px 0;
+      text-align: center;
+    }
+    .canvas-container {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 15px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 250px;
+    }
+    canvas {
+      max-width: 100%;
+      height: auto;
+    }
+    .smiles-text {
+      background: rgba(99, 102, 241, 0.1);
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      margin-bottom: 10px;
+    }
+    .smiles-text strong {
+      color: #6366F1;
+      font-size: 12px;
+      display: block;
+      margin-bottom: 5px;
+    }
+    .smiles-text code {
+      color: #2DD4BF;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      word-break: break-all;
+    }
+    .info {
+      background: rgba(129, 140, 248, 0.1);
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(129, 140, 248, 0.3);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .info p {
+      margin: 3px 0;
+    }
+    .footer {
+      text-align: center;
+      margin-top: 40px;
+      color: #818CF8;
+      font-size: 12px;
+      padding: 20px;
+      background: rgba(99, 102, 241, 0.05);
+      border-radius: 12px;
+      border: 1px solid rgba(99, 102, 241, 0.2);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🧪 SmilesDrawer Test</h1>
+      <p>Organic Chemistry Molecular Structures</p>
+      <p><strong>Minimal Memory</strong> - Model gives small SMILES string</p>
+    </div>
+
+    <div class="molecules-grid">
+      <!-- Benzene -->
+      <div class="molecule-card">
+        <h2>Benzene (बेंज़ीन)</h2>
+        <div class="canvas-container">
+          <canvas id="canvas1" width="350" height="250"></canvas>
+        </div>
+        <div class="smiles-text">
+          <strong>SMILES:</strong>
+          <code>c1ccccc1</code>
+        </div>
+        <div class="info">
+          <p><strong>Formula:</strong> C₆H₆</p>
+          <p><strong>Type:</strong> Aromatic hydrocarbon</p>
+          <p><strong>Key:</strong> Resonance structure, planar</p>
+        </div>
+      </div>
+
+      <!-- Aspirin -->
+      <div class="molecule-card">
+        <h2>Aspirin (एस्पिरिन)</h2>
+        <div class="canvas-container">
+          <canvas id="canvas2" width="350" height="250"></canvas>
+        </div>
+        <div class="smiles-text">
+          <strong>SMILES:</strong>
+          <code>CC(=O)OC1=CC=CC=C1C(=O)O</code>
+        </div>
+        <div class="info">
+          <p><strong>Formula:</strong> C₉H₈O₄</p>
+          <p><strong>IUPAC:</strong> Acetylsalicylic acid</p>
+          <p><strong>Groups:</strong> Ester + Carboxylic acid</p>
+        </div>
+      </div>
+
+      <!-- Glucose -->
+      <div class="molecule-card">
+        <h2>Glucose (ग्लूकोज़)</h2>
+        <div class="canvas-container">
+          <canvas id="canvas3" width="350" height="250"></canvas>
+        </div>
+        <div class="smiles-text">
+          <strong>SMILES:</strong>
+          <code>C(C1C(C(C(C(O1)O)O)O)O)O</code>
+        </div>
+        <div class="info">
+          <p><strong>Formula:</strong> C₆H₁₂O₆</p>
+          <p><strong>Type:</strong> Monosaccharide (sugar)</p>
+          <p><strong>Form:</strong> Cyclic (pyranose)</p>
+        </div>
+      </div>
+
+      <!-- Ethanol -->
+      <div class="molecule-card">
+        <h2>Ethanol (एथेनॉल)</h2>
+        <div class="canvas-container">
+          <canvas id="canvas4" width="350" height="250"></canvas>
+        </div>
+        <div class="smiles-text">
+          <strong>SMILES:</strong>
+          <code>CCO</code>
+        </div>
+        <div class="info">
+          <p><strong>Formula:</strong> C₂H₅OH</p>
+          <p><strong>Type:</strong> Primary alcohol</p>
+          <p><strong>Group:</strong> Hydroxyl (-OH)</p>
+        </div>
+      </div>
+
+      <!-- Caffeine -->
+      <div class="molecule-card">
+        <h2>Caffeine (कैफीन)</h2>
+        <div class="canvas-container">
+          <canvas id="canvas5" width="350" height="250"></canvas>
+        </div>
+        <div class="smiles-text">
+          <strong>SMILES:</strong>
+          <code>CN1C=NC2=C1C(=O)N(C(=O)N2C)C</code>
+        </div>
+        <div class="info">
+          <p><strong>Formula:</strong> C₈H₁₀N₄O₂</p>
+          <p><strong>Type:</strong> Alkaloid (stimulant)</p>
+          <p><strong>Structure:</strong> Fused rings</p>
+        </div>
+      </div>
+
+      <!-- Acetic Acid -->
+      <div class="molecule-card">
+        <h2>Acetic Acid (एसिटिक अम्ल)</h2>
+        <div class="canvas-container">
+          <canvas id="canvas6" width="350" height="250"></canvas>
+        </div>
+        <div class="smiles-text">
+          <strong>SMILES:</strong>
+          <code>CC(=O)O</code>
+        </div>
+        <div class="info">
+          <p><strong>Formula:</strong> CH₃COOH</p>
+          <p><strong>Type:</strong> Carboxylic acid</p>
+          <p><strong>Common:</strong> Vinegar (सिरका)</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>✨ Best for: Organic chemistry structures, molecular diagrams</p>
+      <p>💡 Why: AI model gives tiny SMILES string - minimal memory overhead!</p>
+      <p>📚 SMILES = Simplified Molecular Input Line Entry System</p>
+      <p>🎯 Perfect for IIT-JEE Organic Chemistry preparation</p>
+    </div>
+  </div>
+
+  <script>
+    const molecules = [
+      { canvas: 'canvas1', smiles: 'c1ccccc1' },
+      { canvas: 'canvas2', smiles: 'CC(=O)OC1=CC=CC=C1C(=O)O' },
+      { canvas: 'canvas3', smiles: 'C(C1C(C(C(C(O1)O)O)O)O)O' },
+      { canvas: 'canvas4', smiles: 'CCO' },
+      { canvas: 'canvas5', smiles: 'CN1C=NC2=C1C(=O)N(C(=O)N2C)C' },
+      { canvas: 'canvas6', smiles: 'CC(=O)O' }
+    ];
+
+    const smilesDrawer = new SmilesDrawer.Drawer({
+      width: 350,
+      height: 250,
+      bondThickness: 2.5,
+      bondColor: '#000000',
+      atomColor: '#000000',
+      backgroundColor: '#FFFFFF',
+      fontFamily: 'Lexend, -apple-system, sans-serif',
+      fontSize: 16,
+      bondLength: 20
+    });
+
+    molecules.forEach(mol => {
+      SmilesDrawer.parse(mol.smiles, function(tree) {
+        smilesDrawer.draw(tree, mol.canvas, 'light', false);
+      }, function(err) {
+        console.error('Error parsing SMILES:', err);
+      });
+    });
+  </script>
+</body>
+</html>

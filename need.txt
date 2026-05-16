@@ -1,0 +1,73 @@
+1. Start Metro Server
+Open a dedicated terminal and run:
+
+bash
+npm start
+2. Run Debug Version (on Device/Emulator)
+Ensure your device is connected via ADB, then run:
+
+bash
+npx react-native run-android
+3. Build Standalone Release APK
+To generate a production-ready, standalone APK file:
+
+bash
+cd android && ./gradlew assembleRelease
+TIP
+
+The generated APK will be located at: android/app/build/outputs/apk/release/app-release.apk
+
+4. Build & Install Release (Direct to Device)
+If you want to test the release version directly on your device:
+
+bash
+npx react-native run-android --mode release
+Note: If you encounter a Permission Denied error when running the Gradle command, run chmod +x android/gradlew first.
+
+ Device Management
+List connected devices:
+bash
+adb devices
+Restart ADB server (fixes connection issues):
+bash
+adb kill-server && adb start-server
+2. React Native Specific
+Reverse Port Forwarding (connects device to Metro server):
+bash
+adb reverse tcp:8081 tcp:8081
+Open Developer Menu on the device:
+bash
+adb shell input keyevent 82
+Reload the app:
+bash
+adb shell input keyevent 46 46
+3. Logs & Debugging
+View real-time logs (filtered for your app):
+bash
+adb logcat *:S ReactNative:V ReactNativeJS:V
+Clear logs:
+bash
+adb logcat -c
+4. App Management
+Install an APK:
+bash
+adb install android/app/build/outputs/apk/debug/app-debug.apk
+Uninstall the app:
+bash
+adb uninstall com.padhai
+Force stop the app:
+bash
+adb shell am force-stop com.padhai
+5. File & System
+Take a screenshot:
+bash
+adb shell screencap -p /sdcard/screen.png && adb pull /sdcard/screen.png .
+Check Model storage directory (where we save AI models):
+bash
+adb shell ls /storage/emulated/0/Android/data/com.padhai/files/models
+TIP
+
+If you have multiple devices connected, specify the device ID using -s: adb -s <DEVICE_ID> reverse tcp:8081 tcp:8081
+
+8:35
+
