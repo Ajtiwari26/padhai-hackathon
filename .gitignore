@@ -33,3 +33,8 @@ litert_cache/
 backup_docs/
 # Added by code-review-graph
 .code-review-graph/
+
+# Temporary local state & logs
+AsyncStorage_local*
+*.txt
+*.log

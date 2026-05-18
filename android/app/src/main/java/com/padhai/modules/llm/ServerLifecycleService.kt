@@ -130,6 +130,10 @@ class ServerLifecycleService : Service() {
      * The NanoHTTPD server starts AFTER the model is ready.
      */
     fun startModel(inferenceEngine: InferenceEngine, port: Int, modelPath: String, maxTokens: Int, temp: Float, useGpu: Boolean, serverMode: String, promise: Promise? = null) {
+        if (activeEngine != null && activeEngine !== inferenceEngine) {
+            Log.w("ServerLifecycle", "New engine instance provided. Unloading old engine to prevent OOM memory leak!")
+            activeEngine?.unloadModel()
+        }
         activeEngine = inferenceEngine
         currentServerMode = serverMode
         

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Theme } from '../theme/theme';
@@ -6,6 +6,7 @@ import { AISyllabusGenerator, Curriculum, Chapter } from '../../core/curriculum/
 import { ChatStore } from '../../core/storage/ChatStore';
 import { ResourceStore, ResourceTask } from '../../core/storage/ResourceStore';
 import { ResourcePlanner } from '../../core/planner/ResourcePlanner';
+import { EventBus } from '../../core/bus/EventBus';
 import { RichText } from '../components/RichText';
 import { ArrowLeft, Clock, Zap } from 'lucide-react-native';
 
@@ -16,34 +17,7 @@ export const ChapterDetail: React.FC<{ route: any, navigation: any }> = ({ route
   const [notes, setNotes] = useState<string>('');
   const [resourceTasks, setResourceTasks] = useState<ResourceTask[]>([]);
 
-  useEffect(() => {
-    // On mount, load what we already have (notes, tasks)
-    // But don't trigger AI enrichment automatically
-    loadChapterData();
-  }, []);
-
-  const handleEnrich = async () => {
-    setIsEnriching(true);
-    try {
-      const subjectContext = `${curriculum.subject} - ${curriculum.level}`;
-      const detailed = await AISyllabusGenerator.generateChapterDetail(enrichedChapter, subjectContext, 'foreground');
-      
-      const cIndex = curriculum.chapters.findIndex(c => c.id === detailed.id);
-      if (cIndex > -1) {
-        curriculum.chapters[cIndex] = detailed;
-        await AISyllabusGenerator.saveCurriculum(curriculum);
-      }
-      
-      setEnrichedChapter(detailed);
-      await loadChapterData(detailed);
-    } catch (e) {
-      console.error('[ChapterDetail] Enrichment failed:', e);
-    } finally {
-      setIsEnriching(false);
-    }
-  };
-
-  const loadChapterData = async (chapterToLoad: Chapter = enrichedChapter) => {
+  const loadChapterData = useCallback(async (chapterToLoad: Chapter = enrichedChapter) => {
     // Load notes
     if (chapterToLoad.subtopics && chapterToLoad.subtopics.length > 0) {
       const subtopicNames = chapterToLoad.subtopics.map(s => s.name);
@@ -54,6 +28,55 @@ export const ChapterDetail: React.FC<{ route: any, navigation: any }> = ({ route
     // Load resource progress
     const tasks = await ResourceStore.getTasksForChapter(chapterToLoad.name);
     setResourceTasks(tasks);
+  }, [enrichedChapter]);
+
+  useEffect(() => {
+    // On mount, load what we already have (notes, tasks)
+    // But don't trigger AI enrichment automatically
+    loadChapterData();
+  }, [loadChapterData]);
+
+  const handleEnrich = async () => {
+    setIsEnriching(true);
+    
+    // Queue as user-initiated task with highest priority
+    ResourcePlanner.queueTask(
+      'subtopic',
+      enrichedChapter.id,
+      '',
+      {
+        chapterData: enrichedChapter,
+        subjectContext: `${curriculum.subject} - ${curriculum.level} (Goal: ${curriculum.goal})`
+      },
+      true // User-initiated = highest priority
+    );
+    
+    // Subscribe to task completion
+    const unsubscribe = EventBus.on('chapter:enriched', async (data) => {
+      if (data.chapterId === enrichedChapter.id) {
+        // Reload curriculum to get updated chapter
+        const updatedCurriculum = await AISyllabusGenerator.loadCurriculum();
+        if (updatedCurriculum) {
+          const updatedChapter = updatedCurriculum.chapters.find(c => c.id === enrichedChapter.id);
+          if (updatedChapter) {
+            setEnrichedChapter(updatedChapter);
+            await loadChapterData(updatedChapter);
+          }
+        }
+        
+        // Only stop loading and unsubscribe when complete
+        if (data.phase === 'complete') {
+          setIsEnriching(false);
+          unsubscribe();
+        }
+      }
+    });
+    
+    // Timeout fallback
+    setTimeout(() => {
+      setIsEnriching(false);
+      unsubscribe();
+    }, 120000); // 2 minutes timeout
   };
 
   const getProgressForType = (type: ResourceTask['type']) => {
@@ -126,7 +149,8 @@ export const ChapterDetail: React.FC<{ route: any, navigation: any }> = ({ route
         {isEnriching ? (
           <View style={styles.loadingBox}>
             <ActivityIndicator color={Theme.colors.primary} />
-            <Text style={styles.loadingText}>Mapping out the best logical topics for this chapter...</Text>
+            <Text style={styles.loadingText}>AI is planning topics and concepts for this chapter...</Text>
+            <Text style={styles.loadingSubtext}>This may take 30-60 seconds</Text>
           </View>
         ) : (!enrichedChapter.subtopics || enrichedChapter.subtopics.length === 0) ? (
           <View style={styles.emptySubBox}>
@@ -196,7 +220,8 @@ const styles = StyleSheet.create({
   barFill: { height: '100%', backgroundColor: Theme.colors.primary },
   sectionTitle: { color: Theme.colors.text, fontSize: 20, fontWeight: 'bold', marginBottom: 15 },
   loadingBox: { padding: 30, alignItems: 'center', backgroundColor: Theme.colors.surface, borderRadius: 12 },
-  loadingText: { color: Theme.colors.textMuted, marginTop: 10 },
+  loadingText: { color: Theme.colors.text, marginTop: 10, fontSize: 15, fontWeight: '600' },
+  loadingSubtext: { color: Theme.colors.textMuted, marginTop: 5, fontSize: 13 },
   subCard: { backgroundColor: Theme.colors.surface, padding: 15, borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: Theme.colors.border },
   subHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   subTitle: { color: Theme.colors.text, fontSize: 16, fontWeight: 'bold', flex: 1 },

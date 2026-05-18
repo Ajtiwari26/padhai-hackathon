@@ -1,73 +1,504 @@
-1. Start Metro Server
+# Padh.AI Development Commands
+
+## 🚀 Build & Run Commands
+
+### 1. Start Metro Server
 Open a dedicated terminal and run:
-
-bash
+```bash
 npm start
-2. Run Debug Version (on Device/Emulator)
+```
+
+### 2. Run Debug Version (on Device/Emulator)
 Ensure your device is connected via ADB, then run:
-
-bash
+```bash
 npx react-native run-android
-3. Build Standalone Release APK
+```
+
+### 2a. Build & Install Debug APK (Alternative Method)
+Build debug APK and install it manually:
+```bash
+cd android && ./gradlew installDebug
+```
+Or build first, then install:
+```bash
+cd android && ./gradlew assembleDebug
+adb install app/build/outputs/apk/debug/app-debug.apk
+```
+
+### 3. Build Standalone Release APK
 To generate a production-ready, standalone APK file:
-
-bash
+```bash
 cd android && ./gradlew assembleRelease
-TIP
+```
+**TIP:** The generated APK will be located at: `android/app/build/outputs/apk/release/app-release.apk`
 
-The generated APK will be located at: android/app/build/outputs/apk/release/app-release.apk
-
-4. Build & Install Release (Direct to Device)
+### 4. Build & Install Release (Direct to Device)
 If you want to test the release version directly on your device:
-
-bash
+```bash
 npx react-native run-android --mode release
-Note: If you encounter a Permission Denied error when running the Gradle command, run chmod +x android/gradlew first.
+```
+**Note:** If you encounter a Permission Denied error when running the Gradle command, run `chmod +x android/gradlew` first.
 
- Device Management
-List connected devices:
-bash
+### 5. Clean Build (Fix Build Issues)
+```bash
+cd android && ./gradlew clean
+cd .. && npm start -- --reset-cache
+```
+
+### 6. Install Dependencies
+```bash
+npm install
+cd android && ./gradlew --refresh-dependencies
+```
+
+---
+
+## 📱 Device Management
+
+### List connected devices:
+```bash
 adb devices
-Restart ADB server (fixes connection issues):
-bash
+```
+
+### Restart ADB server (fixes connection issues):
+```bash
 adb kill-server && adb start-server
-2. React Native Specific
-Reverse Port Forwarding (connects device to Metro server):
-bash
+```
+
+### Connect to device over WiFi:
+```bash
+# First connect via USB, then:
+adb tcpip 5555
+adb connect <DEVICE_IP>:5555
+```
+
+### Check device info:
+```bash
+adb shell getprop ro.product.model
+adb shell getprop ro.build.version.release
+```
+
+---
+
+## 🔧 React Native Specific
+
+### Reverse Port Forwarding (connects device to Metro server):
+```bash
 adb reverse tcp:8081 tcp:8081
-Open Developer Menu on the device:
-bash
+```
+
+### Open Developer Menu on the device:
+```bash
 adb shell input keyevent 82
-Reload the app:
-bash
+```
+
+### Reload the app:
+```bash
 adb shell input keyevent 46 46
-3. Logs & Debugging
-View real-time logs (filtered for your app):
-bash
+```
+
+### Enable/Disable Fast Refresh:
+```bash
+# Enable
+adb shell input keyevent 82
+# Then tap "Enable Fast Refresh"
+
+# Disable
+adb shell input keyevent 82
+# Then tap "Disable Fast Refresh"
+```
+
+---
+
+## 📊 Logs & Debugging
+
+### View real-time logs (filtered for your app):
+```bash
 adb logcat *:S ReactNative:V ReactNativeJS:V
-Clear logs:
-bash
+```
+
+### View all logs:
+```bash
+adb logcat
+```
+
+### View logs with tag filter:
+```bash
+adb logcat -s "PadhAI"
+```
+
+### Clear logs:
+```bash
 adb logcat -c
-4. App Management
-Install an APK:
-bash
+```
+
+### Save logs to file:
+```bash
+adb logcat > logs.txt
+```
+
+### View crash logs:
+```bash
+adb logcat *:E
+```
+
+### View native module logs:
+```bash
+adb logcat -s "PadhLocalServer" "PadhModelDownloader" "PadhLiteRT"
+```
+
+---
+
+## 📦 App Management
+
+### Install an APK:
+```bash
 adb install android/app/build/outputs/apk/debug/app-debug.apk
-Uninstall the app:
-bash
+```
+
+### Install APK (replace existing):
+```bash
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+### Uninstall the app:
+```bash
 adb uninstall com.padhai
-Force stop the app:
-bash
+```
+
+### Force stop the app:
+```bash
 adb shell am force-stop com.padhai
-5. File & System
-Take a screenshot:
-bash
+```
+
+### Clear app data:
+```bash
+adb shell pm clear com.padhai
+```
+
+### Launch app:
+```bash
+adb shell am start -n com.padhai/.MainActivity
+```
+
+### Check app info:
+```bash
+adb shell dumpsys package com.padhai
+```
+
+---
+
+## 📁 File & System
+
+### Take a screenshot:
+```bash
 adb shell screencap -p /sdcard/screen.png && adb pull /sdcard/screen.png .
-Check Model storage directory (where we save AI models):
-bash
+```
+
+### Check Model storage directory (where we save AI models):
+```bash
 adb shell ls /storage/emulated/0/Android/data/com.padhai/files/models
-TIP
+```
 
-If you have multiple devices connected, specify the device ID using -s: adb -s <DEVICE_ID> reverse tcp:8081 tcp:8081
+### Pull model file from device:
+```bash
+adb pull /storage/emulated/0/Android/data/com.padhai/files/models/model.task .
+```
 
-8:35
+### Push model file to device:
+```bash
+adb push model.task /storage/emulated/0/Android/data/com.padhai/files/models/
+```
+
+### Check app storage size:
+```bash
+adb shell du -sh /storage/emulated/0/Android/data/com.padhai
+```
+
+### View app database:
+```bash
+adb shell run-as com.padhai ls /data/data/com.padhai/databases
+```
+
+### Pull database for inspection:
+```bash
+adb shell run-as com.padhai cat /data/data/com.padhai/databases/padh.db > padh.db
+```
+
+---
+
+## 🧪 Testing & Debugging
+
+### Run TypeScript type check:
+```bash
+npx tsc --noEmit
+```
+
+### Run ESLint:
+```bash
+npm run lint
+```
+
+### Run tests:
+```bash
+npm test
+```
+
+### Check bundle size:
+```bash
+npx react-native bundle --platform android --dev false --entry-file index.js --bundle-output android/app/src/main/assets/index.android.bundle --assets-dest android/app/src/main/res
+```
+
+### Analyze bundle:
+```bash
+npx react-native-bundle-visualizer
+```
+
+---
+
+## 🔍 Performance Monitoring
+
+### Monitor CPU usage:
+```bash
+adb shell top -n 1 | grep com.padhai
+```
+
+### Monitor memory usage:
+```bash
+adb shell dumpsys meminfo com.padhai
+```
+
+### Monitor battery usage:
+```bash
+adb shell dumpsys batterystats com.padhai
+```
+
+### Monitor network usage:
+```bash
+adb shell dumpsys netstats detail | grep com.padhai
+```
+
+### Profile app performance:
+```bash
+adb shell am profile start com.padhai /sdcard/profile.trace
+# Use the app
+adb shell am profile stop com.padhai
+adb pull /sdcard/profile.trace .
+```
+
+---
+
+## 🛠️ Gradle Commands
+
+### List all Gradle tasks:
+```bash
+cd android && ./gradlew tasks
+```
+
+### Clean build:
+```bash
+cd android && ./gradlew clean
+```
+
+### Build debug APK:
+```bash
+cd android && ./gradlew assembleDebug
+```
+
+### Build release APK:
+```bash
+cd android && ./gradlew assembleRelease
+```
+
+### Build AAB (for Play Store):
+```bash
+cd android && ./gradlew bundleRelease
+```
+
+### Check dependencies:
+```bash
+cd android && ./gradlew dependencies
+```
+
+---
+
+## 🔐 Signing & Release
+
+### Generate keystore:
+```bash
+keytool -genkeypair -v -storetype PKCS12 -keystore padhai-release-key.keystore -alias padhai-key-alias -keyalg RSA -keysize 2048 -validity 10000
+```
+
+### Check keystore:
+```bash
+keytool -list -v -keystore padhai-release-key.keystore
+```
+
+### Sign APK manually:
+```bash
+jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 -keystore padhai-release-key.keystore app-release-unsigned.apk padhai-key-alias
+```
+
+### Verify APK signature:
+```bash
+jarsigner -verify -verbose -certs app-release.apk
+```
+
+---
+
+## 🌐 Network Debugging
+
+### Monitor network requests:
+```bash
+adb shell tcpdump -i any -s 0 -w /sdcard/capture.pcap
+adb pull /sdcard/capture.pcap .
+```
+
+### Check if Metro server is accessible:
+```bash
+adb shell curl http://localhost:8081/status
+```
+
+### Test local server connection:
+```bash
+adb shell curl http://localhost:8080/v1/models
+```
+
+---
+
+## 💾 Storage & Cache
+
+### Clear Metro cache:
+```bash
+npm start -- --reset-cache
+```
+
+### Clear Gradle cache:
+```bash
+cd android && ./gradlew cleanBuildCache
+```
+
+### Clear watchman cache:
+```bash
+watchman watch-del-all
+```
+
+### Clear npm cache:
+```bash
+npm cache clean --force
+```
+
+### Full clean (nuclear option):
+```bash
+rm -rf node_modules
+rm -rf android/app/build
+rm -rf android/.gradle
+npm install
+cd android && ./gradlew clean
+```
+
+---
+
+## 📝 Git Commands (for version control)
+
+### Check status:
+```bash
+git status
+```
+
+### Stage changes:
+```bash
+git add .
+```
+
+### Commit changes:
+```bash
+git commit -m "feat: implement task management system"
+```
+
+### Push to remote:
+```bash
+git push origin main
+```
+
+### Create new branch:
+```bash
+git checkout -b feature/task-scheduler
+```
+
+### View commit history:
+```bash
+git log --oneline --graph --all
+```
+
+---
+
+## 🎯 Quick Troubleshooting
+
+### App won't start:
+```bash
+adb uninstall com.padhai
+npm start -- --reset-cache
+npx react-native run-android
+```
+
+### Metro bundler issues:
+```bash
+pkill -f "node.*metro"
+npm start -- --reset-cache
+```
+
+### Gradle build fails:
+```bash
+cd android && ./gradlew clean
+cd .. && rm -rf android/.gradle
+cd android && ./gradlew assembleDebug
+```
+
+### Native module not found:
+```bash
+cd android && ./gradlew clean
+cd .. && npx react-native run-android
+```
+
+### Device not detected:
+```bash
+adb kill-server
+adb start-server
+adb devices
+```
+
+---
+
+## 💡 Tips
+
+**Multiple Devices:** If you have multiple devices connected, specify the device ID using `-s`:
+```bash
+adb -s <DEVICE_ID> reverse tcp:8081 tcp:8081
+```
+
+**Find Device ID:**
+```bash
+adb devices -l
+```
+
+**Check React Native version:**
+```bash
+npx react-native --version
+```
+
+**Update React Native:**
+```bash
+npx react-native upgrade
+```
+
+**Check Node version:**
+```bash
+node --version
+```
+
+**Check npm version:**
+```bash
+npm --version
+```
 

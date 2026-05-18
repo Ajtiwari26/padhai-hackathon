@@ -79,14 +79,25 @@ export class StudentProfileStore {
 
   static async get(): Promise<StudentProfile> {
     if (this.cache) return this.cache;
-    try {
-      const raw = await AsyncStorage.getItem(PROFILE_KEY);
-      if (!raw) return { ...DEFAULT_PROFILE };
-      this.cache = { ...DEFAULT_PROFILE, ...JSON.parse(raw) };
-      return this.cache!;
-    } catch {
-      return { ...DEFAULT_PROFILE };
+    
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        const raw = await AsyncStorage.getItem(PROFILE_KEY);
+        if (!raw) return { ...DEFAULT_PROFILE };
+        this.cache = { ...DEFAULT_PROFILE, ...JSON.parse(raw) };
+        return this.cache!;
+      } catch (e: any) {
+        console.warn(`[StudentProfileStore] Failed to read profile (attempt ${4 - retries}/3):`, e);
+        if (retries > 1) {
+          await new Promise(resolve => setTimeout(() => resolve(undefined), 500));
+          retries--;
+          continue;
+        }
+        return { ...DEFAULT_PROFILE };
+      }
     }
+    return { ...DEFAULT_PROFILE };
   }
 
   static async save(profile: Partial<StudentProfile>): Promise<void> {

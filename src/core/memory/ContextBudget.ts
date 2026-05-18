@@ -31,18 +31,18 @@ export class ContextBudgetManager {
   
   /**
    * Maximum conversation turns to keep in context, regardless of token budget.
-   * Research: Sliding Window Attention — capping at 2 turns (1 user + 1 assistant)
-   * keeps the model focused and prevents memory bloat on 8k context Gemma 4.
+   * ContextWindowManager compresses older turns into extractive facts before
+   * messages reach this stage, so 4 turns is sufficient.
    * 
    * CRITICAL: This prevents app crashes from growing chat history!
    */
-  private static readonly MAX_HISTORY_TURNS = 2;
+  private static readonly MAX_HISTORY_TURNS = 4;
 
   /**
    * Maximum tokens allowed per individual history message.
    * Long AI responses are truncated to their tail (most recent context).
    */
-  private static readonly MAX_TOKENS_PER_HISTORY_MSG = 300;
+  private static readonly MAX_TOKENS_PER_HISTORY_MSG = 150;
   /**
    * Estimate tokens from a string.
    * Using conservative heuristic: 1 token ≈ 4 characters.
@@ -144,9 +144,20 @@ export class ContextBudgetManager {
     // 2. Allocate History (Newest first, capped by MAX_HISTORY_TURNS)
     // Research: Even if budget allows 30+ short turns, limit to 6 to prevent noisy context.
     const historyToAdd: AssembledMessage[] = [];
-    const cappedHistory = [...rawHistory]
+    
+    // Check if we have a summary message at the beginning (from ContextWindowManager)
+    const hasSummary = rawHistory.length > 0 && rawHistory[0].id.startsWith('summary_');
+    const summaryMsg = hasSummary ? rawHistory[0] : null;
+    const historyToCap = hasSummary ? rawHistory.slice(1) : rawHistory;
+
+    const cappedHistory = [...historyToCap]
       .slice(-ContextBudgetManager.MAX_HISTORY_TURNS)
       .reverse();
+
+    // If we had a summary, add it back so it's processed (it will be the oldest message)
+    if (summaryMsg) {
+      cappedHistory.push(summaryMsg);
+    }
 
     for (const msg of cappedHistory) {
       // Truncate long messages (especially AI responses) to prevent budget blowout

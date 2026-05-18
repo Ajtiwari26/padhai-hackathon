@@ -1,6 +1,9 @@
-import { LocalServerManager } from './LocalServerManager';
+import { LocalServerManager, USE_DIRECT_LITERT } from './LocalServerManager';
 import { ToolRegistry } from '../skills/ToolRegistry';
 import { NativeModules } from 'react-native';
+import { EventBus } from '../bus/EventBus';
+import { KVCache } from '../memory/KVCacheManager';
+import { CoreSelector } from '../system/CoreSelector';
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
@@ -37,7 +40,8 @@ class ModelManagerService {
   private localCircuitBroken = false;
   private activeControllers: Set<{controller: AbortController, priority: 'foreground' | 'background'}> = new Set();
   private portLocks: Map<number, Promise<void>> = new Map();
-  private memoryCheckInterval: NodeJS.Timeout | null = null;
+  private memoryCheckInterval: ReturnType<typeof setTimeout> | null = null;
+  private directEngineLoaded = false; // Track if direct engine is loaded
 
   /**
    * Get lock for a specific port to prevent concurrent inference calls
@@ -69,6 +73,12 @@ class ModelManagerService {
     
     // Start memory monitoring
     this.startMemoryMonitoring();
+    
+    // Start core selector monitoring
+    if (CoreSelector.isAvailable()) {
+      await CoreSelector.startMonitoring();
+      console.log('[ModelManager] Core selector initialized');
+    }
   }
 
   /**
@@ -91,10 +101,29 @@ class ModelManagerService {
         return; // Module not available
       }
       
-      const { usedMemory, totalMemory, availableMemory } = memoryInfo;
+      const { usedMemory, totalMemory } = memoryInfo;
       const memoryPressure = usedMemory / totalMemory;
       
       console.log(`[ModelManager] Memory: ${(usedMemory / 1024 / 1024).toFixed(0)}MB / ${(totalMemory / 1024 / 1024).toFixed(0)}MB (${(memoryPressure * 100).toFixed(1)}%)`);
+      
+      // Emit memory pressure event
+      let level: 'low' | 'medium' | 'high' | 'critical';
+      if (memoryPressure > 0.85) {
+        level = 'critical';
+      } else if (memoryPressure > 0.75) {
+        level = 'high';
+      } else if (memoryPressure > 0.60) {
+        level = 'medium';
+      } else {
+        level = 'low';
+      }
+      
+      if (level !== 'low') {
+        EventBus.emitSync('system:memory:pressure', {
+          level,
+          usedMB: Math.round(usedMemory / 1024 / 1024)
+        });
+      }
       
       if (memoryPressure > 0.85) {
         console.error('[ModelManager] 🔴 CRITICAL MEMORY PRESSURE:', memoryPressure);
@@ -124,9 +153,9 @@ class ModelManagerService {
     }
     
     // 2. Force garbage collection (if available)
-    if (global.gc) {
+    if ((globalThis as any).gc) {
       console.log('[ModelManager] Forcing garbage collection');
-      global.gc();
+      (globalThis as any).gc();
     }
     
     // 3. Clear port locks (release any stuck locks)
@@ -169,26 +198,69 @@ class ModelManagerService {
   /**
    * Check thermal state before inference
    */
-  private async checkThermalState(): Promise<void> {
+  private async checkThermalState(): Promise<{ reduceTokens: boolean }> {
     try {
       const thermal = await NativeModules.PadhThermalMonitor?.getThermalState();
       
-      if (!thermal) return;
+      if (!thermal) return { reduceTokens: false };
       
-      console.log(`[ModelManager] Thermal: ${thermal.state} (headroom: ${(thermal.headroom * 100).toFixed(0)}%)`);
+      // Fix: Check if headroom exists and is a valid number
+      const headroom = (thermal.headroom !== undefined && !isNaN(thermal.headroom)) 
+        ? thermal.headroom 
+        : 0.8; // Default to 80% if undefined
       
-      if (thermal.state === 'critical') {
+      // Determine actual thermal state based on headroom value, not native state string
+      let actualState: 'critical' | 'nominal' | 'light' | 'moderate' | 'severe' = 'nominal';
+      if (headroom < 0.2) {
+        actualState = 'critical';
+      } else if (headroom < 0.4) {
+        actualState = 'severe';
+      } else if (headroom < 0.6) {
+        actualState = 'moderate';
+      } else if (headroom < 0.8) {
+        actualState = 'light';
+      }
+      
+      console.log(`[ModelManager] Thermal: ${actualState} (headroom: ${(headroom * 100).toFixed(0)}%)`);
+      
+      // Emit thermal warning event
+      if (actualState !== 'nominal') {
+        EventBus.emitSync('system:thermal:warning', {
+          state: actualState,
+          temp: thermal.temperature
+        });
+      }
+      
+      if (actualState === 'critical') {
         throw new Error('Device too hot. Please wait for it to cool down.');
       }
       
-      if (thermal.state === 'severe') {
-        console.warn('[ModelManager] 🔥 Severe thermal state, reducing max tokens');
+      if (actualState === 'severe') {
+        console.warn('[ModelManager] 🔥 Severe thermal state, reducing max tokens and switching to efficiency cores');
+        try {
+          await NativeModules.PadhLocalServer?.setCorePriority('efficiency');
+        } catch (e) {
+          console.error('[ModelManager] Failed to set core priority:', e);
+        }
+        return { reduceTokens: true };
       }
+      
+      // Restore priority if nominal
+      if (actualState === 'nominal') {
+        try {
+          await NativeModules.PadhLocalServer?.setCorePriority('performance');
+        } catch (e) {
+          console.error('[ModelManager] Failed to set core priority:', e);
+        }
+      }
+      
+      return { reduceTokens: false };
     } catch (e) {
       if (e instanceof Error && e.message.includes('too hot')) {
         throw e;
       }
       console.error('[ModelManager] Thermal check failed:', e);
+      return { reduceTokens: false };
     }
   }
 
@@ -205,6 +277,10 @@ class ModelManagerService {
     caveman: boolean = false
   ): Promise<string> {
     console.log(`[ModelManager] Starting generate(). Prompt: ${prompt.length}, Priority: ${priority}, Port: ${portOverride || 'default'}, Tools: ${includeTools}, Caveman: ${caveman}`);
+    
+    // Record activity to prevent auto-pause
+    LocalServerManager.recordActivity();
+    
     const result = await this.streamChat(
       [{ role: 'user', content: prompt }],
       () => {},
@@ -217,6 +293,57 @@ class ModelManagerService {
     );
     console.log('[ModelManager] generate() completed successfully. Output length:', result.length);
     return result;
+  }
+
+  /**
+   * Execute a tool call and return the result
+   */
+  private async executeTool(toolCall: ToolCall): Promise<any> {
+    try {
+      const { name, arguments: argsStr } = toolCall.function;
+      const args = JSON.parse(argsStr);
+      
+      console.log(`[ModelManager] Executing tool: ${name} with args:`, args);
+      
+      // Get tool from registry
+      const tool = ToolRegistry.getTool(name);
+      if (!tool) {
+        console.error(`[ModelManager] Tool not found: ${name}`);
+        return { error: `Tool ${name} not found` };
+      }
+      
+      // Execute tool directly (it's already a function)
+      const result = await tool(args);
+      console.log(`[ModelManager] Tool ${name} executed successfully`);
+      return result;
+    } catch (error) {
+      console.error('[ModelManager] Tool execution error:', error);
+      return { error: String(error) };
+    }
+  }
+
+  /**
+   * Summarizes history using the model in caveman mode.
+   */
+  private async summarizeHistory(messages: ChatMessage[]): Promise<string> {
+    const summaryPrompt = `Summarize this conversation briefly, focusing on key facts and decisions. Use caveman style (short, no filler words).\n\n` +
+      messages.map(m => `${m.role}: ${m.content}`).join('\n');
+
+    try {
+      const summary = await this.generate(
+        summaryPrompt,
+        'background',
+        undefined,
+        512,
+        false, // No tools
+        undefined,
+        true // Caveman
+      );
+      return summary;
+    } catch (error) {
+      console.error('[ModelManager] Failed to summarize history:', error);
+      return 'Summary failed.';
+    }
   }
 
   /**
@@ -235,76 +362,144 @@ class ModelManagerService {
   ): Promise<string> {
     console.log(`[ModelManager] streamChat() called. Priority: ${priority}, Messages: ${messages.length}, Port: ${portOverride || 'default'}, Tools: ${includeTools}, Caveman: ${caveman}`);
     
-    // Record activity to prevent auto-pause
+    // Record activity to prevent auto-pause (CRITICAL: Do this FIRST)
     LocalServerManager.recordActivity();
     
-    // Check thermal state before inference
-    await this.checkThermalState();
+    // Estimate tokens for event
+    const estimatedTokens = messages.reduce((sum, m) => sum + Math.ceil((m.content || '').length / 4), 0);
     
-    // Override background tasks if this is a foreground request
-    if (priority === 'foreground') {
-      for (const item of this.activeControllers) {
-        if (item.priority === 'background') {
-          console.log('[ModelManager] Aborting background task to prioritize foreground chat.');
-          item.controller.abort();
-          this.activeControllers.delete(item);
-        }
-      }
-    }
-    const localConfig = (await LocalServerManager.getConfig()) as any;
-    console.log('[ModelManager] Local config loaded:', localConfig.enabled, localConfig.modelId);
-
-    if (!localConfig.enabled) {
-      console.warn('[ModelManager] Local AI disabled in settings');
-      throw new Error("Local AI is currently disabled in Settings.");
-    }
-
-    let isReady = await LocalServerManager.isRunning();
-    console.log('[ModelManager] Local server isReady initially:', isReady);
+    // Emit inference start event
+    EventBus.emitSync('inference:start', {
+      priority,
+      estimatedTokens
+    });
     
-    // Auto-wake local server if it went to sleep
-    if (!isReady) {
-      console.log("[ModelManager] Waking local inference engine...");
-      try {
-        await LocalServerManager.startServer(localConfig);
-        console.log('[ModelManager] startServer called, waiting 3 seconds...');
-        await new Promise<void>(r => setTimeout(() => r(), 3000));
-        isReady = await LocalServerManager.isRunning();
-        console.log('[ModelManager] Local server isReady after wake:', isReady);
-      } catch (e) {
-        console.error("[ModelManager] Local Server failed to wake up:", e);
-        throw new Error("Failed to start local AI engine.");
-      }
-    }
-
-    if (!isReady) {
-      console.error("[ModelManager] Local AI engine is not responding.");
-      throw new Error("Local AI engine is not responding.");
-    }
-
-    // Apply Socratic system prompt + Window Size filtering
-    // (Window slicing is now handled upstream by ContextBudgetManager)
-    const port = portOverride || localConfig.port || 8080;
-    const releaseLock = await this.acquirePortLock(port);
+    const startTime = Date.now();
     
     try {
-      return await this._streamChatInternal(
-        messages,
-        onToken,
-        port,
-        localConfig,
-        signal,
+      
+      // Check thermal state before inference
+      const { reduceTokens } = await this.checkThermalState();
+      
+      let effectiveMaxTokens = maxOutputTokensOverride;
+      if (reduceTokens) {
+        effectiveMaxTokens = maxOutputTokensOverride ? Math.floor(maxOutputTokensOverride / 2) : 512;
+        console.log(`[ModelManager] Throttling: Reducing max tokens to ${effectiveMaxTokens}`);
+      }
+      
+      // Override background tasks if this is a foreground request
+      if (priority === 'foreground') {
+        for (const item of this.activeControllers) {
+          if (item.priority === 'background') {
+            console.log('[ModelManager] Aborting background task to prioritize foreground chat.');
+            item.controller.abort();
+            this.activeControllers.delete(item);
+          }
+        }
+      }
+      const localConfig = (await LocalServerManager.getConfig()) as any;
+      console.log('[ModelManager] Local config loaded:', localConfig.enabled, localConfig.modelId);
+
+      if (!localConfig.enabled) {
+        console.warn('[ModelManager] Local AI disabled in settings');
+        throw new Error("Local AI is currently disabled in Settings.");
+      }
+
+      // FEATURE FLAG: Use direct LiteRT calls if enabled and runtime is litert
+      const useDirect = USE_DIRECT_LITERT && 
+                        (localConfig.runtime === 'litert' || 
+                         localConfig.modelPath?.endsWith('.litertlm'));
+      
+      console.log(`[ModelManager] useDirect evaluation: USE_DIRECT_LITERT=${USE_DIRECT_LITERT}, runtime=${localConfig.runtime}, modelPath=${localConfig.modelPath}, useDirect=${useDirect}`);
+      
+      let result: string;
+      
+      if (useDirect) {
+        console.log('[ModelManager] 🚀 Using DIRECT LiteRT calls (MTP enabled)');
+        result = await this._streamChatDirect(
+          messages,
+          onToken,
+          localConfig,
+          signal,
+          priority,
+          effectiveMaxTokens,
+          includeTools,
+          caveman
+        );
+      } else {
+        // Fallback to HTTP server method
+        console.log('[ModelManager] Using HTTP server method');
+        let isReady = await LocalServerManager.isRunning();
+        console.log('[ModelManager] Local server isReady initially:', isReady);
+        
+        // Auto-wake local server if it went to sleep
+        if (!isReady) {
+          console.log("[ModelManager] Waking local inference engine...");
+          try {
+            await LocalServerManager.startServer(localConfig);
+            console.log('[ModelManager] startServer called, waiting 3 seconds...');
+            await new Promise<void>(r => setTimeout(() => r(), 3000));
+            isReady = await LocalServerManager.isRunning();
+            console.log('[ModelManager] Local server isReady after wake:', isReady);
+          } catch (e) {
+            console.error("[ModelManager] Local Server failed to wake up:", e);
+            throw new Error("Failed to start local AI engine.");
+          }
+        }
+
+        if (!isReady) {
+          console.error("[ModelManager] Local AI engine is not responding.");
+          throw new Error("Local AI engine is not responding.");
+        }
+
+        // Apply Socratic system prompt + Window Size filtering
+        // (Window slicing is now handled upstream by ContextBudgetManager)
+        const port = portOverride || localConfig.port || 8080;
+        const releaseLock = await this.acquirePortLock(port);
+        
+        try {
+          result = await this._streamChatInternal(
+            messages,
+            onToken,
+            port,
+            localConfig,
+            signal,
+            priority,
+            effectiveMaxTokens,
+            includeTools,
+            caveman
+          );
+        } finally {
+          releaseLock();
+        }
+      }
+      
+      // Phase 7: KV Cache Compression
+      KVCache.addChunk(result);
+      
+      // Emit inference end event
+      const duration = Date.now() - startTime;
+      const actualTokens = Math.ceil(result.length / 4);
+      
+      EventBus.emitSync('inference:end', {
         priority,
-        maxOutputTokensOverride,
-        includeTools,
-        caveman
-      );
+        actualTokens,
+        duration
+      });
+      
+      return result;
+      
     } catch (e) {
       const errorMsg = e instanceof Error ? e.message : String(e);
-      console.error(`[ModelManager] streamChat error on port ${port}:`, errorMsg);
+      console.error(`[ModelManager] streamChat error:`, errorMsg);
+      
+      // Emit error event
+      EventBus.emitSync('inference:error', {
+        error: errorMsg,
+        priority
+      });
+      
       throw e;
-    } finally {
-      releaseLock();
     }
   }
 
@@ -441,6 +636,9 @@ class ModelManagerService {
               const content = delta?.content ?? null;
               if (content !== null) {
                 fullText += content;
+                if (fullText.includes('[⚠️ Engine Crash:')) {
+                  throw new Error(fullText);
+                }
                 onToken(content);
                 await new Promise(r => setTimeout(() => r(null), 2));
               }
@@ -513,9 +711,18 @@ class ModelManagerService {
               try {
                 const j = JSON.parse(rawText);
                 fullText = j.choices?.[0]?.message?.content ?? rawText;
+                if (fullText.includes('[⚠️ Engine Crash:')) {
+                  throw new Error(fullText);
+                }
                 onToken(fullText);
               } catch (e) {
+                if (e instanceof Error && e.message.includes('[⚠️ Engine Crash:')) {
+                  throw e;
+                }
                 fullText = rawText;
+                if (fullText.includes('[⚠️ Engine Crash:')) {
+                  throw new Error(fullText);
+                }
                 onToken(rawText);
               }
             }
@@ -542,6 +749,267 @@ class ModelManagerService {
       console.error("[ModelManager] Internal stream error:", e);
       throw e;
     }
+  }
+
+  /**
+   * Direct LiteRT streaming (bypasses HTTP server)
+   * Enables MTP (Multi-Token Prediction) for 2.2x speedup
+   */
+  private async _streamChatDirect(
+    messages: ChatMessage[],
+    onToken: (delta: string) => void,
+    localConfig: any,
+    signal?: AbortSignal,
+    priority: 'foreground' | 'background' = 'foreground',
+    maxOutputTokensOverride?: number,
+    includeTools: boolean = true,
+    caveman: boolean = false
+  ): Promise<string> {
+    try {
+      // Ensure engine is loaded
+      if (!this.directEngineLoaded) {
+        console.log('[ModelManager] Loading direct engine...');
+        await LocalServerManager.loadModelDirect(
+          localConfig.modelPath,
+          localConfig.maxTokens || 8192,
+          localConfig.temperature ?? 0.2,
+          localConfig.useGpu !== undefined ? localConfig.useGpu : true
+        );
+        this.directEngineLoaded = true;
+      }
+
+      let finalMessages = [...messages];
+      
+      // Add caveman system prompt if enabled
+      if (caveman) {
+        finalMessages.unshift({ role: 'system', content: CAVEMAN_SYSTEM_PROMPT });
+      }
+
+      // Convert messages to prompt format
+      // LiteRT expects a single prompt string, not OpenAI-style messages
+      const prompt = this.convertMessagesToPrompt(finalMessages);
+
+      console.log('[ModelManager] 🚀 Direct inference starting (MTP enabled)');
+      const startTime = Date.now();
+
+      // Use streaming for better UX
+      let isToolCall = false;
+      const fullText = await LocalServerManager.generateStreamDirect(
+        prompt,
+        (token) => {
+          if (token.includes('@@TOOL_CALL@@') || isToolCall) {
+            isToolCall = true;
+            // Suppress tool call from UI
+          } else {
+            if (token.includes('[⚠️ Engine Crash:')) {
+              throw new Error(token);
+            }
+            onToken(token);
+          }
+        },
+        {
+          temperature: localConfig.temperature ?? 0.2,
+          maxTokens: maxOutputTokensOverride || localConfig.maxOutputTokens || 4096
+        }
+      );
+
+      const duration = Date.now() - startTime;
+      const tokensPerSecond = (fullText.length / 4) / (duration / 1000);
+      console.log(`[ModelManager] ✅ Direct inference complete. Duration: ${duration}ms, Speed: ${tokensPerSecond.toFixed(1)} tok/s`);
+      
+      // Check for degenerate responses (too short or just end tokens)
+      if (fullText.length < 10 || fullText.trim().match(/^<\/?end/i)) {
+        console.warn(`[ModelManager] ⚠️ Degenerate response (${fullText.length} chars): "${fullText}". Retrying with cache reset...`);
+        
+        // Reset cache and retry once
+        await LocalServerManager.resetCache();
+        this.directEngineLoaded = false; // Force reload
+        
+        return await this._streamChatDirect(
+          messages, onToken, localConfig, signal, priority, maxOutputTokensOverride, includeTools, caveman
+        );
+      }
+
+      // Intercept Native Tool Calls
+      if (fullText.includes('@@TOOL_CALL@@')) {
+        const toolStr = fullText.substring(fullText.indexOf('@@TOOL_CALL@@') + 13);
+        try {
+          const parsed = JSON.parse(toolStr);
+          if (parsed.type === 'tool_call' && parsed.calls) {
+            console.log('[ModelManager] 🛠️ Direct inference requested tool calls:', parsed.calls);
+            const toolMessages: ChatMessage[] = [];
+            
+            const standardToolCalls = parsed.calls.map((c: any, index: number) => ({
+              id: `call_${index}`,
+              type: 'function',
+              function: {
+                name: c.name,
+                arguments: typeof c.args === 'string' ? c.args : JSON.stringify(c.args || {})
+              }
+            }));
+
+            for (const call of standardToolCalls) {
+              const result = await this.executeTool(call);
+              toolMessages.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: JSON.stringify(result)
+              });
+            }
+            
+            // Recurse with tool results
+            return await this._streamChatDirect(
+              [...finalMessages, { role: 'assistant', content: null, tool_calls: standardToolCalls }, ...toolMessages],
+              onToken, localConfig, signal, priority, maxOutputTokensOverride, includeTools, caveman
+            );
+          }
+        } catch (e) {
+          console.error('[ModelManager] Failed to parse direct tool call:', e);
+        }
+      }
+
+      // Guard against empty or degenerate short responses
+      if (!isToolCall && (!fullText || fullText.trim().length < 50)) {
+        // If 0 tokens: engine is broken/corrupted (e.g., double-load issue).
+        // Retrying won't help — go straight to HTTP fallback.
+        if (!fullText || fullText.trim().length === 0) {
+          console.warn(`[ModelManager] ⚠️ Direct engine produced 0 tokens. Engine state is likely corrupted. Skipping retry, falling back to HTTP.`);
+          this.directEngineLoaded = false; // Prevent future direct attempts this session
+          const port = localConfig.port || 8080;
+          const releaseLock = await this.acquirePortLock(port);
+          try {
+            return await this._streamChatInternal(
+              messages, onToken, port, localConfig, signal, priority,
+              maxOutputTokensOverride, includeTools, caveman
+            );
+          } finally {
+            releaseLock();
+          }
+        }
+
+        // If 1-50 chars: engine works but model is confused (echoing, repeating).
+        // Retry once with cache reset and slightly bumped temperature.
+        console.warn(`[ModelManager] ⚠️ Degenerate response (${fullText.length} chars): "${fullText.substring(0, 60)}". Retrying with cache reset...`);
+        try {
+          await LocalServerManager.resetCache();
+        } catch { /* ignore reset errors */ }
+
+        const retryText = await LocalServerManager.generateStreamDirect(
+          prompt,
+          onToken,
+          {
+            temperature: (localConfig.temperature ?? 0.2) + 0.1, // slightly bump temp
+            maxTokens: maxOutputTokensOverride || localConfig.maxOutputTokens || 4096
+          }
+        );
+
+        if (retryText && retryText.trim().length > 0) {
+          console.log(`[ModelManager] ✅ Retry succeeded with ${retryText.length} chars`);
+          return retryText;
+        }
+
+        // Retry also failed — fall back to HTTP server
+        console.warn('[ModelManager] ⚠️ Retry also returned empty. Falling back to HTTP server.');
+        this.directEngineLoaded = false; // Mark engine unreliable
+        const port = localConfig.port || 8080;
+        const releaseLock = await this.acquirePortLock(port);
+        try {
+          return await this._streamChatInternal(
+            messages, onToken, port, localConfig, signal, priority,
+            maxOutputTokensOverride, includeTools, caveman
+          );
+        } finally {
+          releaseLock();
+        }
+      }
+
+      return fullText;
+    } catch (e) {
+      console.error('[ModelManager] Direct streaming failed:', e);
+      
+      // Fallback to HTTP server on error
+      console.log('[ModelManager] Falling back to HTTP server method');
+      this.directEngineLoaded = false; // Reset flag to retry load next time
+      
+      // Use HTTP server method as fallback
+      const port = localConfig.port || 8080;
+      const releaseLock = await this.acquirePortLock(port);
+      
+      try {
+        return await this._streamChatInternal(
+          messages,
+          onToken,
+          port,
+          localConfig,
+          signal,
+          priority,
+          maxOutputTokensOverride,
+          includeTools,
+          caveman
+        );
+      } finally {
+        releaseLock();
+      }
+    }
+  }
+
+  /**
+   * Convert OpenAI-style messages to a single prompt string for Gemma 4.
+   * 
+   * Gemma 4 format: system instructions are embedded in the first user turn.
+   * <start_of_turn>user
+   * [system instructions]
+   * 
+   * [user message]<end_of_turn>
+   * <start_of_turn>model
+   * [response]<end_of_turn>
+   */
+  private convertMessagesToPrompt(messages: ChatMessage[]): string {
+    let prompt = '';
+    
+    // Collect system messages separately
+    const systemParts: string[] = [];
+    const nonSystemMessages: ChatMessage[] = [];
+    
+    for (const msg of messages) {
+      if (msg.role === 'system') {
+        systemParts.push(msg.content || '');
+      } else {
+        nonSystemMessages.push(msg);
+      }
+    }
+    
+    const systemPrefix = systemParts.length > 0 ? systemParts.join('\n\n') + '\n\n' : '';
+    let isFirstUser = true;
+    
+    for (const msg of nonSystemMessages) {
+      if (msg.role === 'user') {
+        if (isFirstUser && systemPrefix) {
+          // Embed system instructions in the first user turn
+          prompt += `<start_of_turn>user\n${systemPrefix}${msg.content}<end_of_turn>\n`;
+          isFirstUser = false;
+        } else {
+          prompt += `<start_of_turn>user\n${msg.content}<end_of_turn>\n`;
+          isFirstUser = false;
+        }
+      } else if (msg.role === 'assistant') {
+        prompt += `<start_of_turn>model\n${msg.content}<end_of_turn>\n`;
+      } else if (msg.role === 'tool') {
+        prompt += `<start_of_turn>user\nTool result: ${msg.content}<end_of_turn>\n`;
+      }
+    }
+    
+    // If no user messages existed but we have system text, wrap it as user turn
+    if (isFirstUser && systemPrefix) {
+      prompt = `<start_of_turn>user\n${systemPrefix.trim()}<end_of_turn>\n` + prompt;
+    }
+    
+    // Add final model turn to prompt generation
+    prompt += '<start_of_turn>model\n';
+    
+    console.log(`[ModelManager] Prompt length: ${prompt.length} chars, turns: ${nonSystemMessages.length}`);
+    
+    return prompt;
   }
 }
 

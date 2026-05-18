@@ -1,4 +1,4 @@
-import { SemanticMemoryInstance } from '../memory/SemanticMemory';
+import { HierarchicalStore } from '../memory/HierarchicalMemoryStore';
 import { DiagramOrchestrator } from '../orchestrator/DiagramOrchestrator';
 import { DiagramAI } from '../../skills/DiagramAIIntegration';
 import { ResourceStore } from '../storage/ResourceStore';
@@ -13,8 +13,16 @@ export const ToolRegistry = {
    */
   async search_memory(args: { query: string }): Promise<string> {
     console.log('[Tool] search_memory:', args.query);
-    const facts = SemanticMemoryInstance.getRelevantContext(args.query, 5);
-    return facts || 'No relevant memory found for this query.';
+    try {
+      const facts = await HierarchicalStore.searchContent(args.query, 5);
+      if (facts && facts.length > 0) {
+        return facts.map(f => f.content).join('\n');
+      }
+      return 'No relevant memory found for this query.';
+    } catch (e) {
+      console.error('[Tool] search_memory error:', e);
+      return 'Error searching memory.';
+    }
   },
 
   /**
@@ -49,12 +57,17 @@ export const ToolRegistry = {
   },
 
   /**
-   * query_app_structure: Uses SigMap to explain how things are built.
+   * getTool: Retrieve a tool function by name for dynamic execution.
    */
-  async query_app_structure(args: { query: string }): Promise<string> {
-    console.log('[Tool] query_app_structure:', args.query);
-    // SigMap context injection logic...
-    return "SigMap structure context would be returned here.";
+  getTool(name: string): ((args: any) => Promise<any>) | undefined {
+    const toolMap: Record<string, (args: any) => Promise<any>> = {
+      search_memory: (args) => this.search_memory(args),
+      generate_diagram: (args) => this.generate_diagram(args),
+      generate_quiz: (args) => this.generate_quiz(args),
+      // Add aliases for common variations
+      explain_concept: (args) => this.search_memory(args), // Fallback to memory search
+    };
+    return toolMap[name];
   }
 };
 

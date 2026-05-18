@@ -1,5 +1,5 @@
 import { ModelManager } from '../api/ModelManager';
-import { MemoryFact } from '../memory/SemanticMemory';
+import { EventBus } from '../bus/EventBus';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export interface Subtopic {
@@ -21,6 +21,7 @@ export interface Chapter {
   dependencies?: string[]; // IDs of chapters required before this
   isEnriched?: boolean;
   status?: 'locked' | 'in_progress' | 'completed';
+  taxonomyPath?: string; // Hierarchical path for memory storage
 }
 
 export interface GenerationProgress {
@@ -56,16 +57,16 @@ class AISyllabusGeneratorService {
     
     try {
       // Cap output at 1024 tokens to prevent native engine SIGSEGV on long generation
-      // Increased timeout to 120s for syllabus generation (heavy local LLM task)
-      const response = await this.generateWithTimeout(
-        prompt, priority, 1024, 120000 
+      // Use retry logic for resilience (will try up to 3 times with increasing timeouts)
+      const response = await this.generateWithRetry(
+        prompt, priority, 1024, 3, false
       );
       const curriculum = this.parseOutline(response, { subject: goal, level, goal, difficulty: level.toLowerCase() });
       curriculum.status = 'draft';
       curriculum.isOutlineOnly = true;
       return curriculum;
     } catch (e) {
-      console.error('[SyllabusGen] Goal-based generation failed:', e);
+      console.error('[SyllabusGen] Goal-based generation failed after retries:', e);
       throw e;
     }
   }
@@ -102,65 +103,137 @@ class AISyllabusGeneratorService {
   }
 
   /**
-   * Phase 1 (Legacy/Automatic): Generate outline from semantic facts
+   * Wrapper with retry logic for resilient generation.
+   * Retries with exponential backoff on timeout/crash.
    */
-  async generateOutline(semanticFacts: MemoryFact[], priority: 'foreground' | 'background' = 'foreground'): Promise<Curriculum> {
-    console.log('[SyllabusGen] ----------------------------------------');
-    console.log('[SyllabusGen] Generating outline from', semanticFacts.length, 'facts');
-
-    const summary = this.extractSummary(semanticFacts);
-    console.log('[SyllabusGen] Extracted summary:', summary);
-
-    const prompt = this.buildOutlinePrompt(summary);
+  private async generateWithRetry(
+    prompt: string,
+    priority: 'foreground' | 'background',
+    maxTokens: number,
+    maxRetries: number = 2,
+    caveman: boolean = false
+  ): Promise<string> {
+    let lastError: Error | null = null;
     
-    try {
-      // Increased timeout to 120s for complex outlines
-      const response = await this.generateWithTimeout(prompt, priority, 1024, 120000);
-      const curriculum = this.parseOutline(response, summary);
-      curriculum.status = 'active';
-      curriculum.isOutlineOnly = true;
-      await this.saveCurriculum(curriculum);
-      return curriculum;
-    } catch (e) {
-      console.error('[SyllabusGen] Outline generation failed:', e);
-      throw e;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        // Increase timeout with each retry: 60s, 120s, 180s
+        const timeout = 60000 * (attempt + 1);
+        console.log(`[SyllabusGen] Attempt ${attempt + 1}/${maxRetries} (timeout: ${timeout}ms)`);
+        
+        return await this.generateWithTimeout(prompt, priority, maxTokens, timeout, caveman);
+      } catch (e) {
+        lastError = e as Error;
+        const errorMsg = lastError.message || String(e);
+        
+        console.warn(`[SyllabusGen] Attempt ${attempt + 1} failed:`, errorMsg);
+        
+        // Don't retry on abort (user cancelled)
+        if (errorMsg.toLowerCase().includes('abort')) {
+          throw lastError;
+        }
+        
+        // Wait before retry (exponential backoff: 2s, 4s)
+        if (attempt < maxRetries - 1) {
+          const waitMs = 2000 * (attempt + 1);
+          console.log(`[SyllabusGen] Waiting ${waitMs}ms before retry...`);
+          await new Promise<void>(resolve => setTimeout(() => resolve(), waitMs));
+        }
+      }
     }
+    
+    throw lastError || new Error('Generation failed after all retries');
   }
 
+
+
   /**
-   * Phase 2: Enrich a single chapter with subtopics and concepts
+   * Phase 2: Enrich a single chapter with subtopics and concepts (Chunked)
    */
   async generateChapterDetail(chapter: Chapter, subjectContext: string, priority: 'foreground' | 'background' = 'foreground'): Promise<Chapter> {
     console.log(`[SyllabusGen] Enriching chapter: ${chapter.name}`);
     
-    // If it already has subtopics, don't regenerate
-    if (chapter.subtopics && chapter.subtopics.length > 0) {
-      return chapter;
-    }
+    let currentChapter = { ...chapter };
 
-    const prompt = this.buildChapterPrompt(chapter, subjectContext);
-    
-    try {
-      // Increased timeout to 90s for chapter enrichment
-      // Enable Caveman mode for background enrichment to save battery and reduce latency
+    // Step 1: Generate Outline if missing
+    if (!currentChapter.subtopics || currentChapter.subtopics.length === 0) {
+      console.log(`[SyllabusGen] Generating outline for chapter: ${chapter.name}`);
+      const prompt = this.buildChapterOutlinePrompt(currentChapter, subjectContext);
       const useCaveman = priority === 'background';
-      const response = await this.generateWithTimeout(prompt, priority, 768, 90000, useCaveman);
-      const enrichedChapter = this.parseChapterDetail(response, chapter);
-      return enrichedChapter;
-    } catch (e: any) {
-      console.error(`[SyllabusGen] Failed to enrich chapter ${chapter.name}:`, e);
       
-      const errorMsg = e.message || String(e);
-      const isAbort = e.name === 'AbortError' || errorMsg.toLowerCase().includes('aborted');
-      const isTimeout = errorMsg.toLowerCase().includes('timeout') || errorMsg.toLowerCase().includes('timed out');
-
-      // Re-throw if it's a transient error that ResourcePlanner should retry
-      if (isAbort || isTimeout) {
+      try {
+        const response = await this.generateWithRetry(prompt, priority, 512, 2, useCaveman);
+        const parsed = this.extractJson(response);
+        
+        if (parsed.subtopics && Array.isArray(parsed.subtopics)) {
+          currentChapter.subtopics = parsed.subtopics.map((st: any) => ({
+            name: st.name || 'Concepts',
+            concepts: [],
+            estimatedHours: 0,
+            difficulty: 0,
+            dependencies: []
+          }));
+          
+          // Save state after outline generation
+          await this.updateChapter(currentChapter);
+          console.log(`[SyllabusGen] Outline generated and saved for ${chapter.name}. ${currentChapter.subtopics.length} subtopics found.`);
+          
+          // Emit event for outline completion
+          EventBus.emit('chapter:enriched', { chapterId: currentChapter.id, phase: 'outline' });
+        } else {
+          throw new Error('Failed to generate chapter outline: Invalid response format');
+        }
+      } catch (e) {
+        console.error(`[SyllabusGen] Failed to generate outline for ${chapter.name}:`, e);
         throw e;
       }
-      
-      return chapter;
     }
+
+    // Step 2: Generate Details for each subtopic that lacks concepts
+    const incompleteSubtopics = currentChapter.subtopics.filter(st => !st.concepts || st.concepts.length === 0);
+    
+    if (incompleteSubtopics.length > 0) {
+      console.log(`[SyllabusGen] Generating details for ${incompleteSubtopics.length} incomplete subtopics in ${chapter.name}`);
+      
+      for (const subtopic of incompleteSubtopics) {
+        console.log(`[SyllabusGen] Generating details for subtopic: ${subtopic.name}`);
+        const prompt = this.buildSubtopicDetailsPrompt(currentChapter, subtopic.name, subjectContext);
+        const useCaveman = priority === 'background';
+        
+        try {
+          const response = await this.generateWithRetry(prompt, priority, 512, 2, useCaveman);
+          const parsedDetails = this.extractJson(response);
+          
+          // Update the specific subtopic in currentChapter
+          const index = currentChapter.subtopics.findIndex(st => st.name === subtopic.name);
+          if (index > -1) {
+            currentChapter.subtopics[index] = {
+              ...currentChapter.subtopics[index],
+              concepts: parsedDetails.concepts || [],
+              estimatedHours: parsedDetails.estimatedHours || 2,
+              difficulty: parsedDetails.difficulty || chapter.difficulty,
+              dependencies: parsedDetails.dependencies || []
+            };
+            
+            // Save state after each subtopic to support resuming
+            await this.updateChapter(currentChapter);
+            console.log(`[SyllabusGen] Saved details for subtopic: ${subtopic.name}`);
+            
+            // Emit event for partial update
+            EventBus.emit('chapter:enriched', { chapterId: currentChapter.id, phase: 'subtopic', subtopic: subtopic.name });
+          }
+        } catch (e) {
+          console.error(`[SyllabusGen] Failed to generate details for subtopic ${subtopic.name}:`, e);
+          // Re-throw to let ResourcePlanner handle retries or failure
+          throw e;
+        }
+      }
+    }
+
+    // Emit event for full completion
+    EventBus.emit('chapter:enriched', { chapterId: currentChapter.id, phase: 'complete' });
+
+    return currentChapter;
   }
 
   /**
@@ -182,50 +255,7 @@ class AISyllabusGeneratorService {
     };
   }
 
-  /**
-   * Extract summary from semantic facts
-   */
-  public extractSummary(facts: MemoryFact[]): {
-    subject: string;
-    level: string;
-    goal: string;
-    focus: string[];
-    difficulty: string;
-  } {
-    const subjectFact = facts.find(f => f.key === 'subject');
-    const levelFact = facts.find(f => f.key === 'level');
-    const goalFacts = facts.filter(f => f.category === 'goals');
-    
-    // Dynamically extract focus areas from fact values — no hardcoded subjects
-    const focusAreas: string[] = [];
-    const focusKeywords = new Set<string>();
-    facts.forEach(f => {
-      if (f.key === 'focus' || f.key === 'struggle' || f.key === 'interest') {
-        const words = f.value.split(/[,;]+/).map(w => w.trim()).filter(w => w.length > 2);
-        words.forEach(w => focusKeywords.add(w));
-      }
-    });
-    focusKeywords.forEach(k => focusAreas.push(k));
 
-    // Determine difficulty target from all fact text
-    let difficulty = 'intermediate';
-    const allText = facts.map(f => f.value.toLowerCase()).join(' ');
-    if (allText.includes('olympiad') || allText.includes('master') || allText.includes('advanced') || allText.includes('expert')) {
-      difficulty = 'advanced';
-    } else if (allText.includes('competitive') || allText.includes('exam') || allText.includes('intermediate')) {
-      difficulty = 'intermediate';
-    } else if (allText.includes('basic') || allText.includes('beginner') || allText.includes('primary')) {
-      difficulty = 'basic';
-    }
-
-    return {
-      subject: subjectFact?.value || 'General Learning',
-      level: levelFact?.value || 'Academic Study',
-      goal: goalFacts.map(f => f.value).join(', ') || 'Skill Mastery',
-      focus: focusAreas,
-      difficulty,
-    };
-  }
 
   /**
    * Build prompt for curriculum outline from a specific goal
@@ -307,35 +337,60 @@ RESPOND ONLY WITH THE JSON, NO OTHER TEXT.`;
   }
 
   /**
-   * Build prompt for chapter detail (Phase 2)
+   * Build prompt for chapter outline (subtopic names only)
    */
-  private buildChapterPrompt(chapter: Chapter, subjectContext: string): string {
-    return `You are an expert curriculum designer. Break down the following chapter into subtopics and concepts.
+  private buildChapterOutlinePrompt(chapter: Chapter, subjectContext: string): string {
+    return `You are an expert curriculum designer. Generate a high-level outline of subtopic names for the following chapter.
+Do NOT generate concepts or details. Just the list of subtopic names.
 
 CONTEXT: ${subjectContext}
 CHAPTER: ${chapter.name}
 DESCRIPTION: ${chapter.description}
-DIFFICULTY: ${chapter.difficulty}
-TOTAL HOURS: ${chapter.estimatedHours}
 
-BREAK IT DOWN INTO SUBTOPICS. For each subtopic:
-1. Provide a name
-2. List 2-4 key concepts to cover
-3. Estimate hours (should sum up to ~${chapter.estimatedHours} total)
-4. Set difficulty (around ${chapter.difficulty})
-5. List dependencies (names of subtopics in this chapter that should be learned first)
+IMPORTANT:
+- The subtopics must be strictly appropriate for the level specified in CONTEXT (e.g., Class 11 CBSE Commerce).
+- Do NOT generate advanced topics suitable for higher education like BBA or MBA.
+- Keep the scope aligned with high school level understanding.
 
 FORMAT AS JSON:
 {
   "subtopics": [
     {
-      "name": "Subtopic Name",
-      "concepts": ["Concept 1", "Concept 2", "Concept 3"],
-      "estimatedHours": 3,
-      "difficulty": ${chapter.difficulty},
-      "dependencies": []
+      "name": "Subtopic Name"
     }
   ]
+}
+
+RESPOND ONLY WITH THE JSON, NO OTHER TEXT.`;
+  }
+
+  /**
+   * Build prompt for a specific subtopic's details
+   */
+  private buildSubtopicDetailsPrompt(chapter: Chapter, subtopicName: string, subjectContext: string): string {
+    return `You are an expert curriculum designer. Provide the detailed concepts and metadata for the following subtopic within its chapter context.
+
+CONTEXT: ${subjectContext}
+CHAPTER: ${chapter.name}
+SUBTOPIC: ${subtopicName}
+
+IMPORTANT:
+- The concepts must be strictly appropriate for the level specified in CONTEXT (e.g., Class 11 CBSE Commerce).
+- Do NOT generate concepts or details suitable for higher education like BBA or MBA.
+- Keep the scope aligned with high school level understanding.
+
+Provide:
+1. List 2-4 key concepts to cover
+2. Estimate hours (typically 1-3)
+3. Set difficulty (around ${chapter.difficulty})
+4. List dependencies (names of other subtopics in this chapter that should be learned first)
+
+FORMAT AS JSON:
+{
+  "concepts": ["Concept 1", "Concept 2", "Concept 3"],
+  "estimatedHours": 2,
+  "difficulty": ${chapter.difficulty},
+  "dependencies": []
 }
 
 RESPOND ONLY WITH THE JSON, NO OTHER TEXT.`;
@@ -384,12 +439,54 @@ RESPOND ONLY WITH THE JSON, NO OTHER TEXT.`;
 
       const jsonStr = targetText.substring(startIndex, endIndex + 1);
       
-      // 3. Clean up common AI artifacts
-      const cleaned = jsonStr
+      // 3. Clean up common AI artifacts and fix malformed JSON
+      let cleaned = jsonStr
         .replace(/\/\/.*$/gm, '') // Remove single-line comments
         .replace(/\/\*[\s\S]*?\*\//g, '') // Remove multi-line comments
-        .replace(/,\s*([\}\]])/g, '$1') // Remove trailing commas
+        .replace(/,\s*([}\]])/g, '$1') // Remove trailing commas
+        .replace(/\[\s*\{\s*\{/g, '[{') // Fix [{{ to [{
+        .replace(/\}\s*\}\s*\]/g, '}]') // Fix }}] to }]
+        .replace(/"\s*"([^":])/g, '", "$1') // Fix missing commas between strings
+        .replace(/(\w+)"\s*"(\w+)/g, '$1", "$2') // Fix missing commas in arrays
+        .replace(/"\s*,\s*,/g, '",') // Fix double commas
+        .replace(/,\s*,/g, ',') // Fix double commas
         .trim();
+      
+      // Fix missing commas between object properties (common AI error)
+      // Pattern: "value"<newline>"key": matches missing comma
+      cleaned = cleaned.replace(/("\s*)\n\s*"/g, '$1,\n"');
+      // Pattern: ]<newline>"key": matches missing comma after array
+      cleaned = cleaned.replace(/(\])\s*\n\s*"/g, '$1,\n"');
+      // Pattern: }<newline>"key": matches missing comma after object
+      cleaned = cleaned.replace(/(\})\s*\n\s*"/g, '$1,\n"');
+      
+      // Fix missing quotes around strings in arrays
+      // Pattern: ["text",unquoted text] -> ["text","unquoted text"]
+      cleaned = cleaned.replace(/,\s*([A-Z][a-zA-Z\s&]+)(?=\]|,)/g, ',"$1"');
+      // Pattern: ["text"unquoted] -> ["text","unquoted"]  
+      cleaned = cleaned.replace(/"\s*([A-Z][a-zA-Z\s&]+)(?=\]|,)/g, '","$1"');
+      
+      // Fix missing quotes in property values
+      // Pattern: "key":unquoted -> "key":"unquoted"
+      cleaned = cleaned.replace(/:\s*([A-Z][a-zA-Z\s&]+)(?=,|\})/g, ':"$1"');
+      
+      // Fix missing quote before colon: Hours":3 -> Hours": 3
+      cleaned = cleaned.replace(/([a-zA-Z])"\s*:/g, '$1":');
+      
+      // Fix truncated strings in arrays: ["text"] -> ["text"]
+      cleaned = cleaned.replace(/\["([^"]*)"?\]/g, (match, content) => {
+        // If content doesn't end with quote, add it
+        if (!match.endsWith('"]')) {
+          return `["${content}"]`;
+        }
+        return match;
+      });
+      
+      // Fix missing commas in arrays: "text""text2" -> "text","text2"
+      cleaned = cleaned.replace(/"([^"]*)"([^,\]}])"([^"]*)"/, '"$1","$3"');
+      
+      // Fix missing quotes around property names: estimatedHours":3 -> "estimatedHours":3
+      cleaned = cleaned.replace(/([,{]\s*)([a-zA-Z]+)("?\s*:)/g, '$1"$2"$3');
 
       try {
         return JSON.parse(cleaned);
@@ -442,6 +539,7 @@ RESPOND ONLY WITH THE JSON, NO OTHER TEXT.`;
         description: ch.description || '',
         dependencies: ch.dependencies || [],
         subtopics: [], // Empty initially
+        taxonomyPath: `student.progress.${(parsed.subject || summary.subject).toLowerCase().replace(/\s+/g, '_')}.${(ch.name || `Chapter ${index + 1}`).toLowerCase().replace(/\s+/g, '_')}`,
       })),
       totalHours,
       createdAt: Date.now(),
@@ -450,23 +548,7 @@ RESPOND ONLY WITH THE JSON, NO OTHER TEXT.`;
     };
   }
 
-  /**
-   * Parse chapter detail from AI response
-   */
-  private parseChapterDetail(response: string, chapter: Chapter): Chapter {
-    const parsed = this.extractJson(response);
-    
-    return {
-      ...chapter,
-      subtopics: (parsed.subtopics || []).map((st: any) => ({
-        name: st.name || 'Concepts',
-        concepts: st.concepts || [],
-        estimatedHours: st.estimatedHours || 2,
-        difficulty: st.difficulty || chapter.difficulty,
-        dependencies: st.dependencies || [],
-      }))
-    };
-  }
+  // Removed parseChapterDetail as parsing is now done inline in generateChapterDetail
 
   // No fallback curriculum — all content is AI-generated or manually created.
 
@@ -488,16 +570,25 @@ RESPOND ONLY WITH THE JSON, NO OTHER TEXT.`;
    */
   async loadCurriculum(): Promise<Curriculum | null> {
     console.log('[SyllabusGen] Loading curriculum from AsyncStorage...');
-    try {
-      const raw = await AsyncStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        console.log('[SyllabusGen] Found existing curriculum with id:', parsed.id);
-        return parsed;
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          console.log('[SyllabusGen] Found existing curriculum with id:', parsed.id);
+          return parsed;
+        }
+        console.log('[SyllabusGen] No existing curriculum found in storage.');
+        return null;
+      } catch (e: any) {
+        console.warn(`[SyllabusGen] Failed to load curriculum (attempt ${4 - retries}/3):`, e);
+        if (retries > 1) {
+          await new Promise<void>(resolve => setTimeout(() => resolve(), 500));
+          retries--;
+          continue;
+        }
       }
-      console.log('[SyllabusGen] No existing curriculum found in storage.');
-    } catch (e) {
-      console.error('[SyllabusGen] Failed to load curriculum from storage:', e);
     }
     return null;
   }
@@ -513,8 +604,12 @@ RESPOND ONLY WITH THE JSON, NO OTHER TEXT.`;
     if (index > -1) {
       curriculum.chapters[index] = chapter;
       
-      // Check if all chapters are now enriched
-      const allEnriched = curriculum.chapters.every(c => c.subtopics && c.subtopics.length > 0);
+      // Check if all chapters are now fully enriched (have subtopics and all subtopics have concepts)
+      const allEnriched = curriculum.chapters.every(c => 
+        c.subtopics && 
+        c.subtopics.length > 0 && 
+        c.subtopics.every(st => st.concepts && st.concepts.length > 0)
+      );
       if (allEnriched) {
         curriculum.isOutlineOnly = false;
       }

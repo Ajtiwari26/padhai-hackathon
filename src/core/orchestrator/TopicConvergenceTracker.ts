@@ -1,4 +1,5 @@
 import { ModelManager } from '../api/ModelManager';
+import { EventBus } from '../bus/EventBus';
 
 export interface TopicProgress {
   topic: string;
@@ -12,6 +13,45 @@ export interface TopicProgress {
 
 class TopicConvergenceTrackerService {
   private currentProgress: TopicProgress | null = null;
+  private eventUnsubscribers: Array<() => void> = [];
+
+  constructor() {
+    // Subscribe to AI responses to auto-evaluate
+    this.subscribeToEvents();
+  }
+
+  /**
+   * Subscribe to Event Bus events
+   */
+  private subscribeToEvents(): void {
+    // Auto-evaluate when AI responds
+    const unsubAiResponse = EventBus.on('ai:response', async (data) => {
+      if (this.currentProgress) {
+        // Use evaluateTurn if we have userMsg, otherwise fallback to evaluateResponse
+        if (data.userMsg) {
+          await this.evaluateTurn(data.userMsg, data.text, data.activeSkill || 'Agentic');
+        } else {
+          await this.evaluateResponse(data.text, data.topic);
+        }
+      }
+    });
+    
+    // Reset tracking when topic changes
+    const unsubTopicChanged = EventBus.on('topic:changed', (data) => {
+      console.log('[ConvergenceTracker] Topic changed, resetting progress');
+      this.currentProgress = null;
+    });
+    
+    this.eventUnsubscribers.push(unsubAiResponse, unsubTopicChanged);
+  }
+
+  /**
+   * Unsubscribe from all events
+   */
+  public destroy(): void {
+    this.eventUnsubscribers.forEach(unsub => unsub());
+    this.eventUnsubscribers = [];
+  }
 
   /**
    * Initializes tracking for a new topic session
@@ -38,6 +78,66 @@ class TopicConvergenceTrackerService {
     };
     
     console.log(`[ConvergenceTracker] Initialized for ${subtopic} with ${activeConcepts.length} concepts`);
+    
+    // Emit topic changed event
+    EventBus.emitSync('topic:changed', {
+      topic,
+      subtopic,
+      reason: 'init_tracking'
+    });
+  }
+
+  /**
+   * Evaluate AI response (called from event)
+   */
+  private async evaluateResponse(aiResponse: string, topic: string): Promise<void> {
+    if (!this.currentProgress) return;
+
+    // Update concept coverage based on AI response content
+    const lowerResponse = aiResponse.toLowerCase();
+    let coveredCount = 0;
+    
+    this.currentProgress.subConcepts.forEach(concept => {
+      // Very basic keyword matching for coverage
+      const keywords = concept.toLowerCase().split(' ').filter(w => w.length > 3);
+      const hit = keywords.some(k => lowerResponse.includes(k));
+      
+      if (hit) {
+        this.currentProgress!.coverage[concept] = Math.min(100, this.currentProgress!.coverage[concept] + 35);
+      }
+      
+      if (this.currentProgress!.coverage[concept] > 80) coveredCount++;
+    });
+
+    // Calculate overall convergence
+    const totalConcepts = this.currentProgress.subConcepts.length;
+    let totalScore = 0;
+    Object.values(this.currentProgress.coverage).forEach(score => totalScore += score);
+    
+    // Convergence is a mix of concept coverage (70%) and student understanding (30%)
+    const coveragePercent = totalConcepts > 0 ? (totalScore / (totalConcepts * 100)) * 100 : 0;
+    const previousConvergence = this.currentProgress.overallConvergence;
+    this.currentProgress.overallConvergence = Math.round((coveragePercent * 0.7) + (this.currentProgress.studentUnderstandingLevel * 0.3));
+
+    // Decide next action
+    if (this.currentProgress.overallConvergence > 85) {
+      this.currentProgress.nextSuggestedAction = 'advance';
+    } else if (this.currentProgress.overallConvergence > 50) {
+      this.currentProgress.nextSuggestedAction = 'mcq'; // Test mid-way
+    } else {
+      this.currentProgress.nextSuggestedAction = 'explain';
+    }
+    
+    console.log(`[ConvergenceTracker] Progress updated: ${this.currentProgress.overallConvergence}% (Action: ${this.currentProgress.nextSuggestedAction})`);
+    
+    // Emit convergence update if significant change
+    if (Math.abs(this.currentProgress.overallConvergence - previousConvergence) >= 10) {
+      EventBus.emitSync('topic:convergence', {
+        topic: this.currentProgress.topic,
+        progress: this.currentProgress.overallConvergence,
+        isConverged: this.currentProgress.overallConvergence > 85
+      });
+    }
   }
 
   /**
@@ -98,6 +198,7 @@ class TopicConvergenceTrackerService {
     
     // Convergence is a mix of concept coverage (70%) and student understanding (30%)
     const coveragePercent = totalConcepts > 0 ? (totalScore / (totalConcepts * 100)) * 100 : 0;
+    const previousConvergence = this.currentProgress.overallConvergence;
     this.currentProgress.overallConvergence = Math.round((coveragePercent * 0.7) + (this.currentProgress.studentUnderstandingLevel * 0.3));
 
     // Decide next action
@@ -114,6 +215,15 @@ class TopicConvergenceTrackerService {
     }
     
     console.log(`[ConvergenceTracker] Progress updated: ${this.currentProgress.overallConvergence}% (Action: ${this.currentProgress.nextSuggestedAction})`);
+    
+    // Emit convergence update if significant change
+    if (Math.abs(this.currentProgress.overallConvergence - previousConvergence) >= 10) {
+      EventBus.emitSync('topic:convergence', {
+        topic: this.currentProgress.topic,
+        progress: this.currentProgress.overallConvergence,
+        isConverged: this.currentProgress.overallConvergence > 85
+      });
+    }
   }
 
   public getProgress(): TopicProgress | null {

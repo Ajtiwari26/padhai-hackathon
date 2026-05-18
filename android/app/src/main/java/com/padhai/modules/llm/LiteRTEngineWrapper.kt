@@ -37,6 +37,11 @@ class LiteRTEngineWrapper(private val context: Context) {
     private var engine: Engine? = null
     private var conversation: Conversation? = null
 
+    @Volatile
+    var isLoading = false
+        private set
+
+    @OptIn(com.google.ai.edge.litertlm.ExperimentalApi::class)
     fun loadModel(
         modelPath: String,
         maxTokens: Int = 2048,
@@ -47,7 +52,22 @@ class LiteRTEngineWrapper(private val context: Context) {
         visionBackend: Backend? = null,
         audioBackend: Backend? = null
     ) {
+        if (isLoading) {
+            Log.w(TAG, "Model is currently loading on another thread. Skipping redundant load.")
+            return
+        }
+        
         try {
+            isLoading = true
+            // CRITICAL: Prevent double-load OOM.
+            // If engine is already loaded, close it first to free ~1.5GB native memory.
+            // This happens when startServer() loads the model, then loadEngineDirect()
+            // tries to load it again — the old Engine leaks and native state corrupts.
+            if (engine != null) {
+                Log.w(TAG, "Engine already loaded. Closing existing engine before reload to prevent OOM.")
+                close()
+            }
+
             val file = File(modelPath)
             if (!file.exists()) {
                 Log.e(TAG, "Model file NOT FOUND at: $modelPath")
@@ -88,6 +108,9 @@ class LiteRTEngineWrapper(private val context: Context) {
             // Log device info for debugging native crashes
             Log.i(TAG, "Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} (API ${android.os.Build.VERSION.SDK_INT})")
             Log.i(TAG, "ABI: ${android.os.Build.SUPPORTED_ABIS.joinToString()}")
+
+            // Enable MTP (Speculative Decoding)
+            com.google.ai.edge.litertlm.ExperimentalFlags.enableSpeculativeDecoding = true
 
             // Try GPU first if requested, then fallback to CPU if it fails
             var lastError: Throwable? = null
@@ -201,6 +224,8 @@ class LiteRTEngineWrapper(private val context: Context) {
             Log.e(TAG, "loadModel fatal Throwable", t)
             close()
             throw Exception("LiteRT fatal error: ${t.message}", t)
+        } finally {
+            isLoading = false
         }
     }
 

@@ -13,7 +13,8 @@ class PadhPackage : ReactPackage {
             PadhVectorDBModule(reactContext),
             PadhKioskManagerModule(reactContext),
             PadhVisionModule(reactContext),
-            PadhNotificationModule(reactContext)
+            PadhNotificationModule(reactContext),
+            CoreSelectorModule(reactContext)
         )
     }
 

@@ -27,26 +27,28 @@ export const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const [curriculum, setCurriculum] = useState<Curriculum | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [enrichmentProgress, setEnrichmentProgress] = useState<GenerationProgress | null>(null);
+  const [taskStats, setTaskStats] = useState({ queued: 0, running: 0, done: 0, failed: 0, total: 0, completionPercent: 0 });
+  const [currentTask, setCurrentTask] = useState<any>(null);
 
   /**
    * Queue initial background tasks for the curriculum
    * This schedules chapter enrichment and initial content generation
    */
-  const queueInitialTasks = async (curr: Curriculum) => {
-    console.log('[HomeScreen] Scheduling background tasks for', curr.chapters.length, 'chapters');
-    
-    // For each chapter, queue a subtopic enrichment task
-    for (const chapter of curr.chapters) {
-      if (!chapter.subtopics || chapter.subtopics.length === 0) {
-        ResourcePlanner.queueTask('subtopic', chapter.id, '', {
-          chapterData: chapter,
-          subjectContext: `${curr.subject} - ${curr.level}`
-        });
-      }
-    }
-    
-    console.log('[HomeScreen] Background task scheduling complete');
-  };
+  // const queueInitialTasks = async (curr: Curriculum) => {
+  //   console.log('[HomeScreen] Scheduling background tasks for', curr.chapters.length, 'chapters');
+  //   
+  //   // For each chapter, queue a subtopic enrichment task
+  //   for (const chapter of curr.chapters) {
+  //     if (!chapter.subtopics || chapter.subtopics.length === 0) {
+  //       ResourcePlanner.queueTask('subtopic', chapter.id, '', {
+  //         chapterData: chapter,
+  //         subjectContext: `${curr.subject} - ${curr.level}`
+  //       });
+  //     }
+  //   }
+  //   
+  //   console.log('[HomeScreen] Background task scheduling complete');
+  // };
 
   const loadCurriculum = useCallback(async () => {
     try {
@@ -64,9 +66,10 @@ export const HomeScreen: React.FC<Props> = ({ navigation }) => {
         const progress = AISyllabusGenerator.getGenerationProgress(existingCurriculum);
         setEnrichmentProgress(progress);
         
-        if (progress.percent < 100) {
-          queueInitialTasks(existingCurriculum);
-        }
+        // Disabled auto-queueing as per user request
+        // if (progress.percent < 100) {
+        //   queueInitialTasks(existingCurriculum);
+        // }
         
         setIsLoading(false);
       } else {
@@ -82,10 +85,23 @@ export const HomeScreen: React.FC<Props> = ({ navigation }) => {
     }
   }, []);
 
+  const loadTaskStats = useCallback(async () => {
+    try {
+      const stats = await ResourcePlanner.getStats();
+      setTaskStats(stats);
+      
+      const current = ResourcePlanner.getCurrentTask();
+      setCurrentTask(current);
+    } catch (e) {
+      console.error('[HomeScreen] Failed to load task stats:', e);
+    }
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       loadCurriculum();
-    }, [loadCurriculum])
+      loadTaskStats();
+    }, [loadCurriculum, loadTaskStats])
   );
 
   // Poll for progress if enrichment is active
@@ -102,10 +118,13 @@ export const HomeScreen: React.FC<Props> = ({ navigation }) => {
             clearInterval(interval);
           }
         }
+        
+        // Also update task stats
+        await loadTaskStats();
       }, 5000); // Poll every 5 seconds
     }
     return () => clearInterval(interval);
-  }, [curriculum, curriculum?.id, enrichmentProgress?.percent, enrichmentProgress]);
+  }, [curriculum, curriculum?.id, enrichmentProgress?.percent, enrichmentProgress, loadTaskStats]);
 
   const getChapterIcon = (chapterName: string) => {
     const name = chapterName.toLowerCase();
@@ -216,6 +235,69 @@ export const HomeScreen: React.FC<Props> = ({ navigation }) => {
               Our AI is mapping out the best subtopics and concepts for your path. You can start learning the already prepared chapters.
             </Text>
           </View>
+        )}
+        
+        {/* Task Widget - Shows current generating task */}
+        {(taskStats.running > 0 || taskStats.queued > 0) && (
+          <TouchableOpacity 
+            style={styles.taskWidget}
+            onPress={() => {
+              // Show task details in an alert for now
+              const taskInfo = currentTask 
+                ? `Current: ${currentTask.type} - ${currentTask.chapterName || currentTask.chapterId}\n\nQueued: ${taskStats.queued} tasks\nRunning: ${taskStats.running}\nCompleted: ${taskStats.done}\nFailed: ${taskStats.failed}`
+                : `Queued: ${taskStats.queued} tasks\nRunning: ${taskStats.running}\nCompleted: ${taskStats.done}\nFailed: ${taskStats.failed}`;
+              
+              // You can replace this with navigation to a proper TaskManager screen later
+              console.log('[HomeScreen] Task stats:', taskInfo);
+            }}
+            activeOpacity={0.8}
+          >
+            <View style={styles.taskWidgetHeader}>
+              <View style={styles.taskWidgetIconContainer}>
+                <Loader size={16} color={Theme.colors.primary} />
+              </View>
+              <View style={styles.taskWidgetInfo}>
+                <Text style={styles.taskWidgetTitle}>
+                  {currentTask ? 'Generating Content' : 'Tasks Queued'}
+                </Text>
+                {currentTask && (
+                  <Text style={styles.taskWidgetSubtitle}>
+                    {currentTask.type === 'subtopic' ? 'Enriching' : 
+                     currentTask.type === 'mcq' ? 'Generating MCQs for' :
+                     currentTask.type === 'numerical' ? 'Creating problems for' :
+                     'Processing'} {currentTask.chapterName || currentTask.chapterId}
+                  </Text>
+                )}
+              </View>
+              <View style={styles.taskWidgetBadge}>
+                <Text style={styles.taskWidgetBadgeText}>{taskStats.queued}</Text>
+              </View>
+            </View>
+            
+            {currentTask?.subtasks && currentTask.currentSubtask !== undefined && (
+              <View style={styles.taskWidgetProgress}>
+                <Text style={styles.taskWidgetProgressText}>
+                  {currentTask.subtasks[currentTask.currentSubtask]?.name || 'Processing...'}
+                </Text>
+                <View style={styles.taskWidgetProgressBar}>
+                  <View 
+                    style={[
+                      styles.taskWidgetProgressFill, 
+                      { width: `${((currentTask.currentSubtask + 1) / currentTask.subtasks.length) * 100}%` }
+                    ]} 
+                  />
+                </View>
+              </View>
+            )}
+            
+            <View style={styles.taskWidgetFooter}>
+              <Text style={styles.taskWidgetQueue}>
+                {taskStats.queued} task{taskStats.queued !== 1 ? 's' : ''} queued
+                {taskStats.running > 0 && ` • ${taskStats.running} running`}
+              </Text>
+              <Text style={styles.taskWidgetAction}>Tap to manage →</Text>
+            </View>
+          </TouchableOpacity>
         )}
 
         {/* Curriculum Overview */}
@@ -724,6 +806,99 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontFamily: Theme.fonts.medium,
   },
+  
+  // Task Widget Styles
+  taskWidget: {
+    backgroundColor: 'rgba(45, 212, 191, 0.08)',
+    borderRadius: 24,
+    padding: 20,
+    marginBottom: 32,
+    borderWidth: 1,
+    borderColor: 'rgba(45, 212, 191, 0.2)',
+  },
+  taskWidgetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  taskWidgetIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: 'rgba(45, 212, 191, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  taskWidgetInfo: {
+    flex: 1,
+  },
+  taskWidgetTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: Theme.colors.onSurface,
+    fontFamily: Theme.fonts.bold,
+    marginBottom: 4,
+  },
+  taskWidgetSubtitle: {
+    fontSize: 13,
+    color: Theme.colors.onSurfaceVariant,
+    fontFamily: Theme.fonts.medium,
+  },
+  taskWidgetBadge: {
+    backgroundColor: Theme.colors.secondary,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  taskWidgetBadgeText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0b1326',
+    fontFamily: Theme.fonts.bold,
+  },
+  taskWidgetProgress: {
+    marginBottom: 16,
+  },
+  taskWidgetProgressText: {
+    fontSize: 12,
+    color: Theme.colors.onSurfaceVariant,
+    fontFamily: Theme.fonts.medium,
+    marginBottom: 8,
+  },
+  taskWidgetProgressBar: {
+    height: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  taskWidgetProgressFill: {
+    height: '100%',
+    backgroundColor: Theme.colors.secondary,
+    borderRadius: 3,
+  },
+  taskWidgetFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  taskWidgetQueue: {
+    fontSize: 13,
+    color: Theme.colors.onSurfaceVariant,
+    fontFamily: Theme.fonts.medium,
+  },
+  taskWidgetAction: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Theme.colors.secondary,
+    fontFamily: Theme.fonts.bold,
+  },
+  
   emptyState: {
     padding: 48,
     alignItems: 'center',

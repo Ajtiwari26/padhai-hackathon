@@ -1,5 +1,5 @@
 import { StudentProfile, EducationLevel } from '../storage/StudentProfile';
-import { MemoryFact } from '../memory/SemanticMemory';
+import { MemoryFact } from '../memory/types';
 
 export type ProfilingPhase = 
   | 'identity' 
@@ -60,58 +60,56 @@ export class StudentProfiler {
   public getSystemPrompt(): string {
     const { currentPhase, data } = this.state;
     
-    let taskHint = "";
+    // Phase-specific question — kept concise for 2B model efficiency
+    let ask = "";
     switch (currentPhase) {
       case 'identity': 
-        taskHint = "EXTRACT IDENTITY: Welcome the student and demand their full name to initialize the profile."; 
+        ask = "Ask their full name."; 
         break;
       case 'education': 
-        taskHint = `EXTRACT ACADEMIC ARENA: You have the name. Now, identify their current battlefield. Ask specifically: 'Are you in school, university, or the professional world?' and follow up by asking for their major or primary focus.`; 
+        ask = "Ask: school/university/working? Which class/year and board/university?"; 
         break;
       case 'academicBaseline': 
-        taskHint = "EXTRACT MASTERY: What is the specific exam or subject you are conquering? What concepts do you already own, and where is your foundation crumbling (struggle points)?"; 
+        ask = "Ask: which subject/exam are you preparing for? What topics are easy vs hard for you?"; 
         break;
       case 'studentArchetype': 
-        taskHint = "EXTRACT ARCHETYPE: Determine if they seek deep conceptual 'why' (Thinker) or rapid 'how-to' (Builder). Ask which one they identify with."; 
+        ask = "Ask: do you prefer deep conceptual understanding (Thinker) or quick practical how-to (Builder)?"; 
         break;
       case 'cognitiveStyle': 
-        taskHint = "EXTRACT COGNITIVE MODALITY: Do you think in high-fidelity visual diagrams or the raw logic of mathematical derivations? Demand a choice."; 
+        ask = "Ask: do you learn better with visual diagrams or text-based explanations?"; 
         break;
       case 'inquiryMethod': 
-        taskHint = "EXTRACT PROTOCOL: Choose your mode: The Socratic Method (I challenge you with questions) or Direct Mode (I deliver high-density knowledge). Which protocol shall we initiate?"; 
+        ask = "Ask: do you want Socratic method (I challenge you with questions) or Direct mode (I explain clearly)?"; 
         break;
       case 'engagementTone': 
-        taskHint = "EXTRACT ATMOSPHERE: Do you thrive under a strict, intense regime or a supportive, humored coaching style? Set the tone now."; 
+        ask = "Ask: do you prefer strict/intense coaching or supportive/friendly coaching?"; 
         break;
       case 'metaInfo': 
-        taskHint = "EXTRACT VISION: What is the single highest-stakes vision driving you? How many hours of absolute deep work can you commit daily? No fluff, just numbers and vision."; 
+        ask = "Ask: what is your goal (exam/career)? How many hours can you study daily?"; 
         break;
       default: 
-        taskHint = "Finalize the profile and prepare for launch.";
+        ask = "Profile complete. Summarize what you know and say you're ready to begin.";
     }
 
-    const contextStr = JSON.stringify(data, null, 2);
+    // Compact data — only include non-empty fields
+    const filledData: Record<string, string> = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (v && String(v).trim()) filledData[k] = String(v);
+    }
+    const dataStr = Object.keys(filledData).length > 0 
+      ? Object.entries(filledData).map(([k,v]) => `${k}: ${v}`).join(', ')
+      : 'none yet';
 
-    return `You are the Padh.ai "Elite Cognitive Architect & Information Extractor". Your absolute priority is to build a high-performance Student Profile.
-You are NOT a friendly assistant; you are a high-status mentor who needs specific data points to initialize the learning engine.
+    return `You are Padh.ai's onboarding mentor. Build a student profile by asking ONE question per turn.
 
-CURRENT STUDENT DATA (EXTRACTED SO FAR):
-${contextStr}
-
-YOUR MISSION THIS TURN:
-1. ${taskHint}
-2. BE AN EXTROVERTED EXTRACTOR: Show intense passion for their potential, but NEVER drift into "How can I help you?" or open-ended fluff.
-3. DEMAND PRECISION: If they are vague, call it out professionally. You need to know exactly who you are coaching.
-4. PROACTIVE QUESTIONING: Your response must always end with a DEFINITIVE question related to the CURRENT PHASE.
-5. SMART INFERENCE: If they already mentioned something in a previous turn (check DATA), skip that question and move to the next phase.
+KNOWN: ${dataStr}
+TASK: ${ask}
 
 RULES:
-- NEVER ask "How can I help you?" or "What would you like to do?".
-- PERSONALITY: High-status, visionary, intense, and data-driven.
-- TONE: Magnetic, professional, and uncompromising on quality.
-- OUTPUT: 3-4 high-impact sentences followed by exactly ONE definitive question.
-- DATA MISSION: You are here to extract, not to chat.
-`;
+- Write 1-2 sentences acknowledging their input, then ask exactly ONE clear question.
+- Never ask "how can I help you" — you lead the conversation.
+- Skip questions already answered (check KNOWN above).
+- Keep total response under 60 words.`;
   }
 
   /**

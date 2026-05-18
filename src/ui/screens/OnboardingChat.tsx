@@ -8,15 +8,20 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Theme } from '../theme/theme';
 import { StudentProfileStore } from '../../core/storage/StudentProfile';
 import { OnboardingProgressStore } from '../../core/storage/OnboardingProgress';
-import { SemanticMemoryInstance } from '../../core/memory/SemanticMemory';
+import { HierarchicalStore } from '../../core/memory/HierarchicalMemoryStore';
 import { ThinkingIndicator } from '../components/ThinkingIndicator';
 import { AIBubble } from '../components/AIBubble';
 import { StudentProfiler } from '../../core/profiling/StudentProfiler';
-import { ModelManager, ChatMessage, ChatRole } from '../../core/api/ModelManager';
+import { ModelManager, ChatMessage } from '../../core/api/ModelManager';
+import { EventBus } from '../../core/bus/EventBus';
+import { ResourcePlanner } from '../../core/planner/ResourcePlanner';
+import { ContextBudget } from '../../core/memory/ContextBudget';
+import { ContextWindow } from '../../core/memory/ContextWindowManager';
+import { ChatMessage as ChatStoreMessage } from '../../core/storage/ChatStore';
 import { Sparkles, ArrowRight, CheckCircle2, Brain } from 'lucide-react-native';
 
-// Memoir (semantic memory) singleton — used for fact storage and retrieval during onboarding
-const semanticMemory = SemanticMemoryInstance;
+// Use HierarchicalStore instead of legacy semantic memory
+const semanticMemory = HierarchicalStore;
 
 interface Message {
   id: string;
@@ -58,7 +63,7 @@ export const OnboardingChat: React.FC<Props> = ({ onComplete, onSkip }) => {
           content: m.content,
           timestamp: Date.now(),
         })),
-        semanticFacts: semanticMemory.getAllFacts(),
+        semanticFacts: [], // Facts persist in SQLite now
         questionCount: phaseProgress,
         lastUpdated: Date.now(),
         isComplete: isFinished,
@@ -66,7 +71,7 @@ export const OnboardingChat: React.FC<Props> = ({ onComplete, onSkip }) => {
     } catch (e) {
       console.error('[OnboardingChat] Failed to save progress:', e);
     }
-  }, [messages, semanticMemory, phaseProgress, isFinished]);
+  }, [messages, phaseProgress, isFinished]);
 
   const loadSavedProgress = useCallback(async () => {
     try {
@@ -95,9 +100,9 @@ export const OnboardingChat: React.FC<Props> = ({ onComplete, onSkip }) => {
                 })));
                 setPhaseProgress(saved.questionCount);
                 
-                // SemanticMemoryInstance already loaded facts at module init
-                if (saved.semanticFacts) {
-                  console.log('[SemanticMemory] Loaded', saved.semanticFacts.length, 'facts');
+                // Knowledge loaded at module init
+                if (saved.semanticFacts && saved.semanticFacts.length > 0) {
+                  console.log('[Memory] Loaded', saved.semanticFacts.length, 'facts');
                 }
                 
                 setIsLoading(false);
@@ -113,7 +118,7 @@ export const OnboardingChat: React.FC<Props> = ({ onComplete, onSkip }) => {
       console.error('[OnboardingChat] Failed to load progress:', e);
       setIsLoading(false);
     }
-  }, [semanticMemory, flatListRef]);
+  }, [flatListRef]);
 
   useEffect(() => {
     // Initial greeting
@@ -129,7 +134,7 @@ export const OnboardingChat: React.FC<Props> = ({ onComplete, onSkip }) => {
     }
   }, [isLoading, messages.length]);
 
-  // Load saved progress on mount (SemanticMemoryInstance auto-loads at module init)
+  // Load saved progress on mount
   useEffect(() => {
     loadSavedProgress();
   }, [loadSavedProgress]);
@@ -160,8 +165,8 @@ export const OnboardingChat: React.FC<Props> = ({ onComplete, onSkip }) => {
       // MEMOIR CRASH PREVENTION: Trim old messages to prevent OOM
       const updated = [...prev, userMessage, aiPlaceholder];
       if (updated.length > MAX_ONBOARDING_MESSAGES) {
-        // Keep first message (greeting) and recent messages
-        return [updated[0], ...updated.slice(-(MAX_ONBOARDING_MESSAGES - 1))];
+        // Keep first 2 messages (greeting + first response) and last 18
+        return [updated[0], updated[1], ...updated.slice(-(MAX_ONBOARDING_MESSAGES - 2))];
       }
       return updated;
     });
@@ -169,44 +174,58 @@ export const OnboardingChat: React.FC<Props> = ({ onComplete, onSkip }) => {
     setIsGenerating(true);
     // isThinking logic removed as it was unused state
 
+    let startTime = Date.now();
+    
+    // EventBus: Emit user message event
+    EventBus.emitSync('user:message', {
+      text: input.trim(),
+      topic: 'onboarding',
+      timestamp: Date.now()
+    });
+    
+    // Request foreground access (preempts background tasks)
+    await ResourcePlanner.requestForegroundAccess();
+    
     try {
-      // 1. Process response in profiler BEFORE generating AI response
+      // Process user input FIRST to extract facts and advance the onboarding phase.
+      // If we don't do this, the system prompt will still instruct the AI to ask the previous question.
       const nextPhase = profiler.processResponse(input.trim(), "");
       setPhaseProgress(profiler.getProgress());
-      
-      // MEMOIR INTEGRATION: Store facts in hierarchical memory
-      const extractedFacts = profiler.getState().facts;
-      await semanticMemory.addFacts(extractedFacts);
-      console.log(`[OnboardingChat] Stored ${extractedFacts.length} facts in hierarchical memory`);
 
       const currentSystemPrompt = profiler.getSystemPrompt();
       
-      // MEMOIR CRASH PREVENTION: Use only recent history + semantic context
-      // Instead of full chat history, use last 3 turns + memory state vector
-      const recentMessages: ChatMessage[] = messages
-        .slice(-6) // Last 3 turns (6 messages)
-        .map(m => ({
-          role: (m.role === 'ai' ? 'assistant' : 'user') as ChatRole,
-          content: m.content
-        }))
-        .filter(m => m.content && m.content.length > 0);
-
-      // Get compact memory context (replaces full history)
-      const memoryContext = await semanticMemory.getRelevantContextAsync('onboarding', 60);
+      // USE OPTIMIZED CONTEXT MANAGEMENT PIPELINE
+      // Convert UI messages to ChatStore format
+      const chatHistory: ChatStoreMessage[] = messages.map(m => ({
+        id: m.id,
+        role: (m.role === 'ai' ? 'ai' : 'user') as 'user' | 'ai',
+        content: m.content,
+        timestamp: Date.now()
+      }));
       
-      // Build compact system prompt with memory state
-      const compactSystemPrompt = currentSystemPrompt + 
-        (memoryContext ? `\n\nMEMORY STATE:\n${memoryContext}` : '');
+      // Apply ContextWindowManager to handle long conversations
+      const optimizedHistory = await ContextWindow.buildContext(chatHistory, 'onboarding');
+      
+      // Get hierarchical memory context (path-selective facts)
+      const hierarchicalFacts = await semanticMemory.getContextForTopic('onboarding', 60);
+      
+      // Use ContextBudgetManager to assemble final messages within token budget
+      const finalMessages = ContextBudget.assembleFinalMessages({
+        systemPrompt: currentSystemPrompt,
+        sessionCheatsheet: '', // No cheatsheet for onboarding
+        semanticFacts: '', // Using hierarchical facts instead
+        hierarchicalFacts: hierarchicalFacts || undefined,
+        rawHistory: optimizedHistory,
+        currentUserMessage: input.trim(),
+        maxTokens: 8192, // Gemma 4 context window
+        maxOutputTokens: 256 // Onboarding: ~60 words = ~80 tokens, 256 is generous
+      });
 
       let fullContent = "";
       let hasStartedGenerating = false;
 
       await ModelManager.streamChat(
-        [
-          { role: 'system', content: compactSystemPrompt },
-          ...recentMessages,
-          { role: 'user', content: input.trim() }
-        ],
+        finalMessages as ChatMessage[],
         (token) => {
           if (!hasStartedGenerating) {
             hasStartedGenerating = true;
@@ -228,6 +247,32 @@ export const OnboardingChat: React.FC<Props> = ({ onComplete, onSkip }) => {
           }
         }
       );
+      
+      // EventBus: Emit AI response event
+      const duration = Date.now() - startTime;
+      const estimatedTokens = Math.ceil(fullContent.length / 4); // Rough estimate
+      EventBus.emitSync('ai:response', {
+        text: fullContent,
+        topic: 'onboarding',
+        duration,
+        tokensUsed: estimatedTokens,
+        userMsg: input.trim()
+      });
+      
+      // MEMOIR INTEGRATION: Store facts in hierarchical memory
+      const extractedFacts = profiler.getState().facts;
+      await semanticMemory.addFacts(extractedFacts.map(f => ({
+        text: f.value,
+        category: f.category,
+        confidence: f.confidence
+      })));
+      console.log(`[OnboardingChat] Stored ${extractedFacts.length} facts in hierarchical memory`);
+      
+      // EventBus: Emit memory update event
+      EventBus.emitSync('memory:updated', {
+        factCount: extractedFacts.length,
+        topic: 'onboarding'
+      });
 
       // 2. Check if we are finished
       if (nextPhase === 'complete') {
@@ -251,13 +296,20 @@ export const OnboardingChat: React.FC<Props> = ({ onComplete, onSkip }) => {
                            errorMsg.toLowerCase().includes('out of') ||
                            errorMsg.toLowerCase().includes('crash');
       
+      Alert.alert(
+        "Error",
+        isMemoryError 
+          ? "I'm experiencing memory issues. Your progress is saved. Please restart the app to continue."
+          : `I'm having trouble: ${errorMsg}. Let's try again?`
+      );
+
       setMessages(prev => {
         const updated = [...prev];
-        if (isMemoryError) {
-          updated[updated.length - 1].content = 
-            "I'm experiencing memory issues. Your progress is saved. Please restart the app to continue.";
-        } else {
-          updated[updated.length - 1].content = `I'm having trouble: ${errorMsg}. Let's try again?`;
+        if (updated.length > 0) {
+          const last = updated[updated.length - 1];
+          if (last.role === 'ai' && !last.content) {
+            updated.pop();
+          }
         }
         return updated;
       });
@@ -265,6 +317,9 @@ export const OnboardingChat: React.FC<Props> = ({ onComplete, onSkip }) => {
       // Save progress even on error
       await saveProgress();
     } finally {
+      // Release foreground access (resumes background tasks)
+      ResourcePlanner.releaseForegroundAccess();
+      
       setIsGenerating(false);
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     }

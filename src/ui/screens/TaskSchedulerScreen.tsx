@@ -1,19 +1,19 @@
-/**
- * Task Scheduler Screen
- * 
- * Shows all background tasks with progress, pause/resume/cancel controls
- */
-
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView,
   TouchableOpacity, RefreshControl, Alert
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import DraggableFlatList, { RenderItemParams } from 'react-native-draggable-flatlist';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Theme } from '../theme/theme';
 import { ResourceStore, ResourceTask } from '../../core/storage/ResourceStore';
 import { ResourcePlanner } from '../../core/planner/ResourcePlanner';
-import { ArrowLeft, Play, Pause, X, CheckCircle, BookOpen, Book, HelpCircle, Calculator, FileText, Dumbbell, ClipboardList } from 'lucide-react-native';
+import { 
+  ArrowLeft, Play, Pause, X, CheckCircle, BookOpen, Book, 
+  HelpCircle, Calculator, FileText, Dumbbell, ClipboardList,
+  ArrowUp, SkipForward, GripVertical
+} from 'lucide-react-native';
 
 interface Props {
   navigation: any;
@@ -21,6 +21,8 @@ interface Props {
 
 export const TaskSchedulerScreen: React.FC<Props> = ({ navigation }) => {
   const [tasks, setTasks] = useState<ResourceTask[]>([]);
+  const [queuedTasks, setQueuedTasks] = useState<ResourceTask[]>([]);
+  const [completedTasks, setCompletedTasks] = useState<ResourceTask[]>([]);
   const [stats, setStats] = useState({
     queued: 0,
     running: 0,
@@ -31,6 +33,7 @@ export const TaskSchedulerScreen: React.FC<Props> = ({ navigation }) => {
   });
   const [isPaused, setIsPaused] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showCompleted, setShowCompleted] = useState(false);
 
   useEffect(() => {
     loadTasks();
@@ -40,12 +43,25 @@ export const TaskSchedulerScreen: React.FC<Props> = ({ navigation }) => {
 
   const loadTasks = async () => {
     const allTasks = await ResourceStore.getAllTasks();
-    // Sort by priority, then by creation time
-    allTasks.sort((a, b) => {
-      if (a.priority !== b.priority) return a.priority - b.priority;
+    
+    // Separate queued and completed tasks
+    const queued = allTasks.filter(t => t.status === 'queued' || t.status === 'running' || t.status === 'paused');
+    const completed = allTasks.filter(t => t.status === 'done' || t.status === 'failed' || t.status === 'skipped');
+    
+    // Sort queued by effective priority
+    queued.sort((a, b) => {
+      const aPriority = a.userPriority ?? a.basePriority ?? a.priority;
+      const bPriority = b.userPriority ?? b.basePriority ?? b.priority;
+      if (aPriority !== bPriority) return aPriority - bPriority;
       return a.createdAt - b.createdAt;
     });
+    
+    // Sort completed by completion time (most recent first)
+    completed.sort((a, b) => b.createdAt - a.createdAt);
+    
     setTasks(allTasks);
+    setQueuedTasks(queued);
+    setCompletedTasks(completed);
 
     const taskStats = await ResourcePlanner.getStats();
     setStats(taskStats);
@@ -85,6 +101,44 @@ export const TaskSchedulerScreen: React.FC<Props> = ({ navigation }) => {
         }
       ]
     );
+  };
+  
+  const handlePauseTask = async (task: ResourceTask) => {
+    await ResourcePlanner.pauseTask(task.id);
+    await loadTasks();
+  };
+  
+  const handleResumeTask = async (task: ResourceTask) => {
+    await ResourcePlanner.resumeTask(task.id);
+    await loadTasks();
+  };
+  
+  const handleSkipTask = (task: ResourceTask) => {
+    Alert.alert(
+      'Skip Task',
+      `Skip "${getTaskLabel(task.type)}" for ${task.chapterId}? This will remove it from the queue.`,
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Yes, Skip',
+          onPress: async () => {
+            await ResourcePlanner.skipTask(task.id);
+            await loadTasks();
+          }
+        }
+      ]
+    );
+  };
+  
+  const handlePrioritizeTask = async (task: ResourceTask) => {
+    await ResourcePlanner.prioritizeTask(task.id);
+    await loadTasks();
+  };
+  
+  const handleDragEnd = async ({ data }: { data: ResourceTask[] }) => {
+    setQueuedTasks(data);
+    const taskIds = data.map(t => t.id);
+    await ResourcePlanner.reorderTasks(taskIds);
   };
 
   const getTaskLabel = (type: ResourceTask['type']): string => {
@@ -138,8 +192,95 @@ export const TaskSchedulerScreen: React.FC<Props> = ({ navigation }) => {
     }
   };
 
+  const renderTaskCard = ({ item, drag, isActive }: RenderItemParams<ResourceTask>) => {
+    const canControl = item.status === 'queued' || item.status === 'paused';
+    
+    return (
+      <View style={[styles.taskCard, isActive && styles.taskCardDragging]}>
+        <View style={styles.taskHeader}>
+          <TouchableOpacity 
+            onLongPress={drag}
+            disabled={!canControl}
+            style={styles.taskTitleRow}
+          >
+            {canControl && (
+              <View style={styles.dragHandle}>
+                <GripVertical size={20} color={Theme.colors.textMuted} />
+              </View>
+            )}
+            <View style={styles.taskIcon}>{getTaskIcon(item.type)}</View>
+            <View style={styles.taskInfo}>
+              <Text style={styles.taskTitle}>{getTaskLabel(item.type)}</Text>
+              <Text style={styles.taskSubtitle}>{item.chapterId}</Text>
+              {item.subtopic && (
+                <Text style={styles.taskSubtopic}>• {item.subtopic}</Text>
+              )}
+              {item.subtasks && item.currentSubtask !== undefined && (
+                <Text style={styles.taskProgress}>
+                  {item.subtasks[item.currentSubtask]?.name || 'Processing...'}
+                </Text>
+              )}
+            </View>
+          </TouchableOpacity>
+          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) + '20' }]}>
+            <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
+              {getStatusLabel(item.status)}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.taskFooter}>
+          <Text style={styles.taskTime}>
+            Priority: {item.userPriority ?? item.basePriority ?? item.priority} • {new Date(item.createdAt).toLocaleTimeString()}
+          </Text>
+          {canControl && (
+            <View style={styles.taskActions}>
+              {item.status === 'paused' ? (
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  onPress={() => handleResumeTask(item)}
+                >
+                  <Play size={14} color={Theme.colors.secondary} />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  onPress={() => handlePauseTask(item)}
+                >
+                  <Pause size={14} color={Theme.colors.textMuted} />
+                </TouchableOpacity>
+              )}
+              
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => handlePrioritizeTask(item)}
+              >
+                <ArrowUp size={14} color={Theme.colors.primary} />
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => handleSkipTask(item)}
+              >
+                <SkipForward size={14} color={Theme.colors.textMuted} />
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => handleCancelTask(item)}
+              >
+                <X size={14} color="#ef4444" />
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  };
+
   return (
-    <SafeAreaView style={styles.container}>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
@@ -195,61 +336,65 @@ export const TaskSchedulerScreen: React.FC<Props> = ({ navigation }) => {
       </View>
 
       {/* Task List */}
-      <ScrollView
-        style={styles.taskList}
-        contentContainerStyle={styles.taskListContent}
-        refreshControl={
-          <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />
-        }
-      >
-        {tasks.length === 0 ? (
+      <View style={styles.taskListContainer}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Queue ({queuedTasks.length})</Text>
+          <TouchableOpacity onPress={() => setShowCompleted(!showCompleted)}>
+            <Text style={styles.toggleText}>
+              {showCompleted ? 'Hide' : 'Show'} Completed
+            </Text>
+          </TouchableOpacity>
+        </View>
+        
+        {queuedTasks.length === 0 ? (
           <View style={styles.emptyState}>
             <CheckCircle size={64} color={Theme.colors.primary} style={{ marginBottom: 16 }} />
             <Text style={styles.emptyText}>No tasks in queue</Text>
             <Text style={styles.emptySubtext}>All background work is complete!</Text>
           </View>
         ) : (
-          tasks.map((task) => (
-            <View key={task.id} style={styles.taskCard}>
-              <View style={styles.taskHeader}>
-                <View style={styles.taskTitleRow}>
-                  <View style={styles.taskIcon}>{getTaskIcon(task.type)}</View>
-                  <View style={styles.taskInfo}>
-                    <Text style={styles.taskTitle}>{getTaskLabel(task.type)}</Text>
-                    <Text style={styles.taskSubtitle}>{task.chapterId}</Text>
-                    {task.subtopic && (
-                      <Text style={styles.taskSubtopic}>• {task.subtopic}</Text>
-                    )}
+          <DraggableFlatList
+            data={queuedTasks}
+            onDragEnd={handleDragEnd}
+            keyExtractor={(item) => item.id}
+            renderItem={renderTaskCard}
+            contentContainerStyle={styles.taskListContent}
+            showsVerticalScrollIndicator={false}
+          />
+        )}
+        
+        {showCompleted && completedTasks.length > 0 && (
+          <View style={styles.completedSection}>
+            <Text style={styles.sectionTitle}>Completed ({completedTasks.length})</Text>
+            <ScrollView
+              style={styles.completedList}
+              contentContainerStyle={styles.taskListContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {completedTasks.map((task) => (
+                <View key={task.id} style={styles.taskCard}>
+                  <View style={styles.taskHeader}>
+                    <View style={styles.taskTitleRow}>
+                      <View style={styles.taskIcon}>{getTaskIcon(task.type)}</View>
+                      <View style={styles.taskInfo}>
+                        <Text style={styles.taskTitle}>{getTaskLabel(task.type)}</Text>
+                        <Text style={styles.taskSubtitle}>{task.chapterId}</Text>
+                      </View>
+                    </View>
+                    <View style={[styles.statusBadge, { backgroundColor: getStatusColor(task.status) + '20' }]}>
+                      <Text style={[styles.statusText, { color: getStatusColor(task.status) }]}>
+                        {getStatusLabel(task.status)}
+                      </Text>
+                    </View>
                   </View>
                 </View>
-                <View style={[styles.statusBadge, { backgroundColor: getStatusColor(task.status) + '20' }]}>
-                  <Text style={[styles.statusText, { color: getStatusColor(task.status) }]}>
-                    {getStatusLabel(task.status)}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.taskFooter}>
-                <Text style={styles.taskTime}>
-                  Priority: {task.priority} • {new Date(task.createdAt).toLocaleTimeString()}
-                </Text>
-                {(task.status === 'queued' || task.status === 'running') && (
-                  <TouchableOpacity
-                    style={styles.cancelBtn}
-                    onPress={() => handleCancelTask(task)}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      <X size={12} color="#ef4444" />
-                      <Text style={styles.cancelBtnText}>Cancel</Text>
-                    </View>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          ))
+              ))}
+            </ScrollView>
+          </View>
         )}
-      </ScrollView>
+      </View>
     </SafeAreaView>
+    </GestureHandlerRootView>
   );
 };
 
@@ -360,9 +505,75 @@ const styles = StyleSheet.create({
   taskList: {
     flex: 1,
   },
+  taskListContainer: {
+    flex: 1,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: Theme.colors.surfaceHigh,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.colors.glassBorder,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Theme.colors.text,
+  },
+  toggleText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Theme.colors.primary,
+  },
   taskListContent: {
     padding: 16,
     paddingTop: 0,
+  },
+  taskCardDragging: {
+    opacity: 0.8,
+    transform: [{ scale: 1.02 }],
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  dragHandle: {
+    marginRight: 8,
+    padding: 4,
+  },
+  taskActions: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+  },
+  actionBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Theme.colors.surfaceHigh,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Theme.colors.glassBorder,
+  },
+  taskProgress: {
+    fontSize: 11,
+    color: Theme.colors.primary,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  completedSection: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: Theme.colors.glassBorder,
+  },
+  completedList: {
+    maxHeight: 300,
   },
   emptyState: {
     alignItems: 'center',

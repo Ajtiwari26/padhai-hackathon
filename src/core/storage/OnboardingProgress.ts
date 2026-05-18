@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { MemoryFact } from '../memory/SemanticMemory';
+import { MemoryFact } from '../memory/types';
 
 export interface OnboardingMessage {
   role: 'ai' | 'user';

@@ -1,7 +1,11 @@
 import { NativeModules, NativeEventEmitter, EmitterSubscription } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { EventBus } from '../bus/EventBus';
 
 const { PadhLocalServer, PadhModelDownloader } = NativeModules;
+
+// Feature flag for direct LiteRT calls (bypasses HTTP server)
+export const USE_DIRECT_LITERT = true;
 
 // Suppress NativeEventEmitter warnings
 if (PadhLocalServer) {
@@ -39,7 +43,7 @@ export class LocalServerManager {
   // Auto-pause configuration
   private static idleTimeout = 60000; // 60 seconds
   private static lastActivityTime = Date.now();
-  private static idleCheckInterval: NodeJS.Timeout | null = null;
+  private static idleCheckInterval: ReturnType<typeof setTimeout> | null = null;
   private static isPaused = false;
 
   static async initialize(): Promise<void> {
@@ -103,6 +107,11 @@ export class LocalServerManager {
       if (PadhLocalServer?.pause) {
         await PadhLocalServer.pause();
       }
+      
+      // Emit pause event
+      EventBus.emitSync('system:pause', {
+        reason: 'idle_timeout'
+      });
     } catch (e) {
       console.error('[LocalServerManager] Failed to pause engine:', e);
     }
@@ -121,6 +130,11 @@ export class LocalServerManager {
       if (PadhLocalServer?.resume) {
         await PadhLocalServer.resume();
       }
+      
+      // Emit resume event
+      EventBus.emitSync('system:resume', {
+        reason: 'activity_detected'
+      });
     } catch (e) {
       console.error('[LocalServerManager] Failed to resume engine:', e);
     }
@@ -147,9 +161,6 @@ export class LocalServerManager {
       clearInterval(this.idleCheckInterval);
       this.idleCheckInterval = null;
     }
-    } catch (e) {
-      console.warn("Failed to initialize Padh.ai Native Local Server", e);
-    }
   }
 
   static async getConfig(): Promise<LocalServerConfig> {
@@ -173,7 +184,7 @@ export class LocalServerManager {
       const raw = await AsyncStorage.getItem(this.STORAGE_KEY);
       if (!raw) return defaults;
       return { ...defaults, ...JSON.parse(raw) };
-    } catch(e) {
+    } catch {
       return defaults;
     }
   }
@@ -186,6 +197,9 @@ export class LocalServerManager {
     try {
       // Save the config first so it persists
       await this.saveConfig(config);
+      
+      // Stop existing server if running to prevent EADDRINUSE
+      await this.stopServer();
       
       return await PadhLocalServer.startServer(
         config.port,
@@ -228,7 +242,7 @@ export class LocalServerManager {
         return await PadhLocalServer.getServerStatus();
       }
       return false;
-    } catch (e) {
+    } catch {
       return false;
     }
   }
@@ -250,7 +264,7 @@ export class LocalServerManager {
         ? modelId 
         : `${modelId}.task`;
       return await PadhModelDownloader.checkModelExists(filename);
-    } catch (e) {
+    } catch {
       return false;
     }
   }
@@ -262,7 +276,7 @@ export class LocalServerManager {
         ? modelId 
         : `${modelId}.task`;
       return await PadhModelDownloader.getModelPath(filename);
-    } catch (e) {
+    } catch {
       return "";
     }
   }
@@ -288,5 +302,159 @@ export class LocalServerManager {
   static async cancelDownload(downloadId: string): Promise<void> {
     if (!PadhModelDownloader) return;
     await PadhModelDownloader.cancelDownload(downloadId);
+  }
+
+  // --- Direct LiteRT Bridge Methods (Bypass HTTP Server) ---
+
+  /**
+   * Load model directly into LiteRT engine without HTTP server
+   * Enables MTP (Multi-Token Prediction) for 2.2x speedup
+   */
+  static async loadModelDirect(
+    modelPath: string,
+    maxTokens: number = 8192,
+    temperature: number = 0.2,
+    useGpu: boolean = true
+  ): Promise<boolean> {
+    try {
+      if (!PadhLocalServer) {
+        throw new Error('PadhLocalServer native module not available');
+      }
+      
+      console.log('[LocalServerManager] 🚀 Loading model directly (MTP enabled):', modelPath);
+      await PadhLocalServer.loadEngineDirect(modelPath, maxTokens, temperature, useGpu);
+      console.log('[LocalServerManager] ✅ Model loaded directly');
+      return true;
+    } catch (e) {
+      console.error('[LocalServerManager] Failed to load model directly:', e);
+      throw e;
+    }
+  }
+
+  /**
+   * Generate response directly (non-streaming)
+   * Bypasses HTTP server overhead
+   */
+  static async generateDirect(
+    prompt: string,
+    _options?: {
+      temperature?: number;
+      maxTokens?: number;
+    }
+  ): Promise<string> {
+    try {
+      if (!PadhLocalServer) {
+        throw new Error('PadhLocalServer native module not available');
+      }
+      
+      console.log('[LocalServerManager] 🎯 Direct inference (non-streaming)');
+      const response = await PadhLocalServer.generateResponseDirect(prompt);
+      return response;
+    } catch (e) {
+      console.error('[LocalServerManager] Direct generation failed:', e);
+      throw e;
+    }
+  }
+
+  /**
+   * Generate response directly with streaming.
+   * Bypasses HTTP server overhead, uses native event emitter.
+   */
+  static async generateStreamDirect(
+    prompt: string,
+    onToken: (token: string) => void,
+    _options?: {
+      temperature?: number;
+      maxTokens?: number;
+    }
+  ): Promise<string> {
+    try {
+      if (!PadhLocalServer || !PadhLiteRTEmitter) {
+        throw new Error('PadhLocalServer native module not available');
+      }
+      
+      console.log('[LocalServerManager] 🎯 Direct inference (streaming)');
+      
+      return new Promise<string>((resolve, reject) => {
+        let fullText = '';
+        let tokenSubscription: EmitterSubscription | null = null;
+        let completeSubscription: EmitterSubscription | null = null;
+        let errorSubscription: EmitterSubscription | null = null;
+        let completionTimeout: ReturnType<typeof setTimeout>;
+        let resolved = false;
+
+        const cleanup = () => {
+          if (completionTimeout) clearTimeout(completionTimeout);
+          if (tokenSubscription) {
+            tokenSubscription.remove();
+            tokenSubscription = null;
+          }
+          if (completeSubscription) {
+            completeSubscription.remove();
+            completeSubscription = null;
+          }
+          if (errorSubscription) {
+            errorSubscription.remove();
+            errorSubscription = null;
+          }
+        };
+
+        const finish = () => {
+          if (resolved) return;
+          resolved = true;
+          // Defer cleanup to next tick to avoid RN JSI crash when removing listener during dispatch
+          setTimeout(() => {
+            cleanup();
+          }, 0);
+          resolve(fullText);
+        };
+
+        const resetCompletionTimeout = () => {
+          if (completionTimeout) clearTimeout(completionTimeout);
+          // Increase timeout for initial response to 15s (model needs time to load/warm up)
+          // After first token, use 8s timeout for subsequent tokens
+          const timeoutMs = fullText.length > 0 ? 8000 : 15000;
+          completionTimeout = setTimeout(() => {
+            console.log(`[LocalServerManager] Stream timeout (${timeoutMs}ms). Collected ${fullText.length} chars.`);
+            finish();
+          }, timeoutMs);
+        };
+
+        // Listen for tokens
+        tokenSubscription = PadhLiteRTEmitter.addListener('onToken', (token: string) => {
+          fullText += token;
+          onToken(token);
+          resetCompletionTimeout();
+        });
+
+        // Listen for explicit generation_complete event from native
+        completeSubscription = PadhLiteRTEmitter.addListener('generation_complete', () => {
+          console.log('[LocalServerManager] Native generation_complete received');
+          finish();
+        });
+
+        // Listen for generation_error from native — fail fast instead of 15s wait
+        errorSubscription = PadhLiteRTEmitter.addListener('generation_error', (errorMsg: string) => {
+          console.error(`[LocalServerManager] Native generation_error: ${errorMsg}`);
+          if (!resolved) {
+            resolved = true;
+            // Defer cleanup to next tick to avoid RN JSI crash when removing listener during dispatch
+            setTimeout(() => {
+              cleanup();
+            }, 0);
+            reject(new Error(`Native generation error: ${errorMsg}`));
+          }
+        });
+        
+        // Start generation
+        PadhLocalServer.generateResponseStreamDirect(prompt);
+        
+        // Start the initial completion timer
+        resetCompletionTimeout();
+      });
+    } catch (e) {
+      console.error('[LocalServerManager] Direct streaming failed:', e);
+      throw e;
+    }
   }
 }

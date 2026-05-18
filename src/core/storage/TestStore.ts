@@ -1,6 +1,7 @@
-import { createMMKV } from 'react-native-mmkv';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const storage = createMMKV({ id: 'padh-tests-hub' });
+const TESTS_KEY = 'padh-tests';
+const ASSIGNMENTS_KEY = 'padh-assignments';
 
 export interface TestQuestion {
   id: string;
@@ -43,8 +44,13 @@ export interface AssignmentEntry {
 
 class TestStoreService {
   public async getTests(): Promise<TestEntry[]> {
-    const raw = storage.getString('tests');
-    return raw ? JSON.parse(raw) : [];
+    try {
+      const raw = await AsyncStorage.getItem(TESTS_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      console.error('[TestStore] Failed to read tests:', e);
+      return [];
+    }
   }
 
   public async saveTest(test: TestEntry): Promise<void> {
@@ -55,12 +61,17 @@ class TestStoreService {
     } else {
       tests.unshift(test);
     }
-    storage.set('tests', JSON.stringify(tests));
+    await AsyncStorage.setItem(TESTS_KEY, JSON.stringify(tests));
   }
 
   public async getAssignments(): Promise<AssignmentEntry[]> {
-    const raw = storage.getString('assignments');
-    return raw ? JSON.parse(raw) : [];
+    try {
+      const raw = await AsyncStorage.getItem(ASSIGNMENTS_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      console.error('[TestStore] Failed to read assignments:', e);
+      return [];
+    }
   }
 
   public async saveAssignment(assignment: AssignmentEntry): Promise<void> {
@@ -71,7 +82,7 @@ class TestStoreService {
     } else {
       assignments.unshift(assignment);
     }
-    storage.set('assignments', JSON.stringify(assignments));
+    await AsyncStorage.setItem(ASSIGNMENTS_KEY, JSON.stringify(assignments));
   }
 }
 

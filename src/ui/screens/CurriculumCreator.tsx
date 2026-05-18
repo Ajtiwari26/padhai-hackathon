@@ -6,6 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Theme } from '../theme/theme';
 import { AISyllabusGenerator } from '../../core/curriculum/AISyllabusGenerator';
+import { EventBus } from '../../core/bus/EventBus';
 import { ArrowLeft, Target, Rocket } from 'lucide-react-native';
 
 export const CurriculumCreator: React.FC<{ navigation: any }> = ({ navigation }) => {
@@ -19,6 +20,13 @@ export const CurriculumCreator: React.FC<{ navigation: any }> = ({ navigation })
     setIsGenerating(true);
     try {
       const draft = await AISyllabusGenerator.generateFromGoal(goal, level);
+      
+      // EventBus: Emit syllabus generated event
+      EventBus.emitSync('syllabus:generated', {
+        topicId: draft.id,
+        chapterCount: draft.chapters.length
+      });
+      
       navigation.navigate('CurriculumReview', { draft });
     } catch (e) {
       console.error('[CurriculumCreator] Generation failed:', e);

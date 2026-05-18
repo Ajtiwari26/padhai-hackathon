@@ -1,15 +1,18 @@
-import { createMMKV } from 'react-native-mmkv';
-import { StudentKnowledgeMap } from '../memory/MemoryCondenser';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const storage = createMMKV({ id: 'padh-knowledge-graph' });
+const NODES_KEY = 'padh-graph-nodes';
+const EDGES_KEY = 'padh-graph-edges';
 
-export interface GraphNode extends StudentKnowledgeMap {
+export interface GraphNode {
   id: string;
   label: string;
   subject: string;
   x: number; // 0 to 1 relative coordinate
   y: number; // 0 to 1 relative coordinate
   size: number;
+  confidence: number;
+  weakPoints: string[];
+  lastPhase: string;
 }
 
 export interface GraphEdge {
@@ -21,19 +24,37 @@ export interface GraphEdge {
 // Removed hardcoded default nodes and edges. 
 // We now return an empty graph if the student hasn't started learning.
 
+// In-memory cache to allow synchronous getGraph() reads
+let cachedNodes: GraphNode[] | null = null;
+let cachedEdges: GraphEdge[] | null = null;
+
 class KnowledgeGraphBuilderService {
+  /**
+   * Initialize cache from AsyncStorage. Call this once at startup.
+   */
+  public async init(): Promise<void> {
+    try {
+      const [nodesStr, edgesStr] = await Promise.all([
+        AsyncStorage.getItem(NODES_KEY),
+        AsyncStorage.getItem(EDGES_KEY),
+      ]);
+      cachedNodes = nodesStr ? JSON.parse(nodesStr) : [];
+      cachedEdges = edgesStr ? JSON.parse(edgesStr) : [];
+    } catch (e) {
+      console.error('[KnowledgeGraphBuilder] Failed to load from storage:', e);
+      cachedNodes = [];
+      cachedEdges = [];
+    }
+  }
+
   /**
    * Fetches the student's current knowledge DAG (Directed Acyclic Graph).
    */
   public getGraph(): { nodes: GraphNode[], edges: GraphEdge[] } {
-    const storedNodesStr = storage.getString('graph_nodes');
-    const storedEdgesStr = storage.getString('graph_edges');
-    
-    // Return empty arrays if no graph exists
-    const nodes = storedNodesStr ? JSON.parse(storedNodesStr) : [];
-    const edges = storedEdgesStr ? JSON.parse(storedEdgesStr) : [];
-    
-    return { nodes, edges };
+    return { 
+      nodes: cachedNodes || [], 
+      edges: cachedEdges || [] 
+    };
   }
 
   /**
@@ -45,7 +66,11 @@ class KnowledgeGraphBuilderService {
     if (nodeIndex > -1) {
       nodes[nodeIndex].confidence = confidence;
       nodes[nodeIndex].weakPoints = weakPoints;
-      storage.set('graph_nodes', JSON.stringify(nodes));
+      cachedNodes = nodes;
+      // Fire-and-forget async persist
+      AsyncStorage.setItem(NODES_KEY, JSON.stringify(nodes)).catch(e =>
+        console.error('[KnowledgeGraphBuilder] Failed to persist nodes:', e)
+      );
     }
   }
 

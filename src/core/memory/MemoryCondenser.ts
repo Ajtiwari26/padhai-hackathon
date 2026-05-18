@@ -4,13 +4,6 @@ import { NativeModules } from 'react-native';
 
 const { PadhVectorDB } = NativeModules;
 
-export interface StudentKnowledgeMap {
-  topic: string;
-  confidence: number; // 0-100
-  weakPoints: string[];
-  lastPhase: 'BREADTH_SWEEP' | 'SOCRATIC_MOLDING' | 'VISION_MENTORING';
-  unresolvedQuestions: string[];
-}
 
 class MemoryCondenserService {
   /**
@@ -89,13 +82,7 @@ Output ONLY the structured cheatsheet. No conversational filler.
     }
   }
 
-  /**
-   * Updates the Student Knowledge Map (The "Diagnostic DAG").
-   */
-  public async updateKnowledgeMap(topic: string, delta: Partial<StudentKnowledgeMap>): Promise<void> {
-    // Persistent storage logic (e.g. SQLite or MMKV)
-    console.log(`[MemoryCondenser] Updating Knowledge Map for ${topic}:`, delta);
-  }
+
 }
 
 export const MemoryCondenser = new MemoryCondenserService();

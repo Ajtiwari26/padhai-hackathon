@@ -7,11 +7,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Theme } from '../theme/theme';
 import { TutorOrchestrator } from '../../core/orchestrator/TutorOrchestrator';
 import { StudentProfileStore, EducationLevel } from '../../core/storage/StudentProfile';
-import { SemanticMemory, MemoryFact } from '../../core/memory/SemanticMemory';
+import { HierarchicalStore } from '../../core/memory/HierarchicalMemoryStore';
+import { ClassificationResult } from '../../core/memory/PatternClassifier';
 import { OnboardingProgressStore } from '../../core/storage/OnboardingProgress';
 import { ThinkingIndicator } from '../components/ThinkingIndicator';
 import { AIBubble } from '../components/AIBubble';
-import { Target, ArrowRight, Sparkles, Brain, Briefcase, GraduationCap } from 'lucide-react-native';
+import { Target, ArrowRight, Sparkles } from 'lucide-react-native';
 
 interface Props {
   navigation?: any;
@@ -32,7 +33,7 @@ export interface CareerPlanData {
     subjects: string[];
     timeline: string;
   };
-  semanticFacts: MemoryFact[];
+  semanticFacts: ClassificationResult[];
 }
 
 const CAREER_PLANNER_SYSTEM_PROMPT = `
@@ -61,7 +62,7 @@ CRITICAL RULES:
 Start by warmly welcoming them and asking for their name and current education level.
 `;
 
-export const CareerPlannerScreen: React.FC<Props> = ({ navigation, route, onComplete, onSkip }) => {
+export const CareerPlannerScreen: React.FC<Props> = ({ navigation, route: _route, onComplete, onSkip }) => {
   const [messages, setMessages] = useState<Array<{ id: string; role: 'ai' | 'user'; content: string }>>([
     { 
       id: '0', 
@@ -75,7 +76,7 @@ export const CareerPlannerScreen: React.FC<Props> = ({ navigation, route, onComp
   const [isFinished, setIsFinished] = useState(false);
   const [careerPlan, setCareerPlan] = useState<CareerPlanData | null>(null);
   const scrollRef = useRef<ScrollView>(null);
-  const semanticMemory = useRef(new SemanticMemory()).current;
+  const sessionClassifications = useRef<ClassificationResult[]>([]);
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -84,7 +85,7 @@ export const CareerPlannerScreen: React.FC<Props> = ({ navigation, route, onComp
       duration: 600,
       useNativeDriver: true,
     }).start();
-  }, []);
+  }, [fadeAnim]);
 
   const handleSend = async () => {
     if (!input.trim() || isGenerating || isFinished) return;
@@ -112,7 +113,7 @@ export const CareerPlannerScreen: React.FC<Props> = ({ navigation, route, onComp
         ? `${input.trim()}\n\n(This is my last answer. Please provide your career recommendations and learning roadmap now!)`
         : input.trim();
 
-      const relevantContext = semanticMemory.getRelevantContext(turnPrompt, 5);
+      const relevantContext = await HierarchicalStore.getContextForTopic("Career Strategy", 60);
       const history = relevantContext ? [
         { role: 'system' as const, content: relevantContext }
       ] : [];
@@ -131,16 +132,15 @@ export const CareerPlannerScreen: React.FC<Props> = ({ navigation, route, onComp
         history
       );
 
-      // Extract facts
-      const facts = semanticMemory.extractFacts(input.trim(), fullContent);
-      semanticMemory.addFacts(facts);
+      const classifications = await HierarchicalStore.processExchange(input.trim(), fullContent);
+      sessionClassifications.current.push(...classifications);
 
       setQuestionCount(prev => prev + 1);
 
       if (isLastTurn) {
         setIsFinished(true);
         // Parse career plan from AI response
-        const plan = parseCareerPlan(fullContent, semanticMemory.getAllFacts());
+        const plan = parseCareerPlan(fullContent, sessionClassifications.current);
         setCareerPlan(plan);
       }
 
@@ -157,11 +157,11 @@ export const CareerPlannerScreen: React.FC<Props> = ({ navigation, route, onComp
     }
   };
 
-  const parseCareerPlan = (aiResponse: string, facts: MemoryFact[]): CareerPlanData => {
-    const nameFact = facts.find(f => f.key === 'name');
-    const levelFact = facts.find(f => f.key === 'level');
-    const subjectFacts = facts.filter(f => f.key === 'subject');
-    const goalFacts = facts.filter(f => f.category === 'goals');
+  const parseCareerPlan = (aiResponse: string, facts: ClassificationResult[]): CareerPlanData => {
+    const nameFact = facts.find(f => f.path === 'student.identity.name');
+    const levelFact = facts.find(f => f.path === 'student.identity.grade');
+    const subjectFacts = facts.filter(f => f.path.startsWith('student.progress.'));
+    const goalFacts = facts.filter(f => f.path.startsWith('student.goals.'));
 
     // Extract career recommendations from AI response
     const educationMatch = aiResponse.match(/education[:\s]+([^\n]+)/i);
@@ -172,8 +172,8 @@ export const CareerPlannerScreen: React.FC<Props> = ({ navigation, route, onComp
     return {
       name: nameFact?.value || 'Student',
       currentEducation: levelFact?.value || 'Not specified',
-      interests: facts.filter(f => f.category === 'preferences').map(f => f.value),
-      strengths: facts.filter(f => f.value.toLowerCase().includes('good at')).map(f => f.value),
+      interests: facts.filter(f => f.path.startsWith('student.preferences')).map(f => f.value),
+      strengths: facts.filter(f => f.path === 'student.performance.strengths').map(f => f.value),
       careerGoal: goalFacts[0]?.value || 'Exploring options',
       recommendedPath: {
         education: educationMatch?.[1] || 'Undergraduate degree in relevant field',
@@ -189,37 +189,6 @@ export const CareerPlannerScreen: React.FC<Props> = ({ navigation, route, onComp
     if (!careerPlan) return;
 
     // Pre-fill onboarding data based on career plan
-    const onboardingFacts: MemoryFact[] = [
-      {
-        category: 'personal',
-        key: 'name',
-        value: careerPlan.name,
-        confidence: 1.0,
-        timestamp: Date.now(),
-      },
-      {
-        category: 'academic',
-        key: 'level',
-        value: careerPlan.currentEducation,
-        confidence: 0.9,
-        timestamp: Date.now(),
-      },
-      {
-        category: 'goals',
-        key: 'career_goal',
-        value: careerPlan.careerGoal,
-        confidence: 0.9,
-        timestamp: Date.now(),
-      },
-      ...careerPlan.recommendedPath.subjects.map((subject, i) => ({
-        category: 'academic' as const,
-        key: 'subject',
-        value: subject,
-        confidence: 0.85,
-        timestamp: Date.now() + i,
-      })),
-    ];
-
     // Save to onboarding progress
     await OnboardingProgressStore.saveProgress({
       messages: messages.map(m => ({
@@ -227,7 +196,7 @@ export const CareerPlannerScreen: React.FC<Props> = ({ navigation, route, onComp
         content: m.content,
         timestamp: Date.now(),
       })),
-      semanticFacts: onboardingFacts,
+      semanticFacts: [],
       questionCount: questionCount,
       lastUpdated: Date.now(),
       isComplete: false, // Will complete in actual onboarding
@@ -356,7 +325,7 @@ export const CareerPlannerScreen: React.FC<Props> = ({ navigation, route, onComp
               style={styles.acceptBtn} 
               onPress={handleAcceptPlan}
             >
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <View style={styles.acceptBtnContent}>
                 <Sparkles size={18} color="#FFF" />
                 <Text style={styles.acceptBtnText}>Deploy Roadmap</Text>
                 <ArrowRight size={18} color="#FFF" />
@@ -565,6 +534,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 12,
     elevation: 6,
+  },
+  acceptBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
   acceptBtnText: {
     color: '#FFF',

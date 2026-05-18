@@ -10,6 +10,7 @@ import { Theme } from './src/ui/theme/theme';
 import { StudentProfileStore } from './src/core/storage/StudentProfile';
 import { LocalServerManager } from './src/core/api/LocalServerManager';
 import { ResourcePlanner } from './src/core/planner/ResourcePlanner';
+import { AdaptiveScheduler } from './src/core/scheduler/AdaptiveScheduler';
 
 // Screens
 import { SplashScreen } from './src/ui/screens/SplashScreen';
@@ -26,7 +27,7 @@ import { ExamScreen } from './src/ui/screens/ExamScreen';
 import { ScoreCard } from './src/ui/screens/ScoreCard';
 import { QuestionDoubtSolver } from './src/ui/screens/QuestionDoubtSolver';
 import { ChapterDetail } from './src/ui/screens/ChapterDetail';
-import { TaskSchedulerScreen } from './src/ui/screens/TaskSchedulerScreen';
+// import { TaskSchedulerScreen } from './src/ui/screens/TaskSchedulerScreen'; // Disabled: requires react-native-reanimated native build
 import { CurriculumCreator } from './src/ui/screens/CurriculumCreator';
 import { CurriculumReview } from './src/ui/screens/CurriculumReview';
 
@@ -105,14 +106,51 @@ const App = () => {
 
   useEffect(() => {
     const init = async () => {
+      // Wait for native modules to settle (fixes AsyncStorage connection closed error)
+      await new Promise(resolve => setTimeout(() => resolve(undefined), 1000));
+
       // Start the background task scheduler
       ResourcePlanner.start();
       console.log('[App] ResourcePlanner scheduler started');
+
+      // Initialize adaptive scheduler
+      AdaptiveScheduler.init();
+
+      // Initialize EventBus listeners
+      const { EventBusListeners } = await import('./src/core/bus/EventBusListeners');
+      EventBusListeners.initialize();
+      console.log('[App] EventBus listeners initialized');
 
       // Initialize native service in background without blocking the UI boot
       LocalServerManager.initialize().catch(e => 
         console.warn('[App] Engine init deferred or failed:', e)
       );
+      
+      // Initialize advanced optimizations
+      console.log('[App] Initializing advanced optimizations...');
+      
+      // KV Cache Manager is auto-initialized via singleton
+      // Context Window Manager is auto-initialized via singleton
+      // Core Selector will be initialized when ModelManager boots
+      
+      // Load KnowledgeGraphBuilder cache from AsyncStorage
+      try {
+        const { KnowledgeGraphBuilder } = await import('./src/core/analytics/KnowledgeGraphBuilder');
+        await KnowledgeGraphBuilder.init();
+      } catch (e) {
+        console.warn('[App] KnowledgeGraphBuilder init failed (non-fatal):', e);
+      }
+      
+      console.log('[App] Advanced optimizations ready');
+      
+      // CRITICAL FIX: Initialize HierarchicalMemoryStore
+      try {
+        const { HierarchicalStore } = await import('./src/core/memory/HierarchicalMemoryStore');
+        await HierarchicalStore.clearSession(); // Clear ephemeral session data
+        console.log('[App] HierarchicalMemoryStore initialized and session cleared');
+      } catch (e) {
+        console.error('[App] Failed to initialize HierarchicalMemoryStore:', e);
+      }
       
       setIsLoading(false);
     };
@@ -180,7 +218,7 @@ const App = () => {
             <Stack.Screen name="ExamScreen" component={ExamScreen} />
             <Stack.Screen name="ScoreCard" component={ScoreCard} />
             <Stack.Screen name="QuestionDoubtSolver" component={QuestionDoubtSolver} />
-            <Stack.Screen name="TaskScheduler" component={TaskSchedulerScreen} />
+            {/* <Stack.Screen name="TaskScheduler" component={TaskSchedulerScreen} /> */}
             <Stack.Screen name="Analytics" component={KnowledgeGraph} />
             <Stack.Screen name="Saved" component={KnowledgeGraph} />
             <Stack.Screen name="CurriculumCreator" component={CurriculumCreator} />

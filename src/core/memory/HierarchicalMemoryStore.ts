@@ -108,6 +108,28 @@ class HierarchicalMemoryStoreService {
     }
   }
 
+  /**
+   * Add pre-extracted facts directly to the hierarchical store.
+   * Maps legacy SemanticMemory categories to taxonomy paths.
+   */
+  async addFacts(facts: { text: string; category: string; confidence: number }[]): Promise<void> {
+    if (!this.isNativeAvailable) return;
+    try {
+      for (const fact of facts) {
+        let path = 'student.progress.general';
+        if (fact.category === 'personal') path = 'student.identity';
+        else if (fact.category === 'preferences') path = 'student.preferences';
+        else if (fact.category === 'goals') path = 'student.goals';
+        else if (fact.category === 'struggles') path = 'student.performance.weakness';
+        else if (fact.category === 'academic') path = 'student.progress.general';
+        
+        await PadhVectorDB.upsertNode(path, fact.text, fact.confidence);
+      }
+    } catch (e) {
+      console.error('[HierarchicalStore] addFacts failed:', e);
+    }
+  }
+
   // ── Aggregation (Memoir's core pattern) ─────────────────────
 
   /**

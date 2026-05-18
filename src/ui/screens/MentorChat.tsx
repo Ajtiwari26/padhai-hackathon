@@ -1,8 +1,8 @@
-import React, { useState, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TextInput,
   TouchableOpacity, FlatList, KeyboardAvoidingView,
-  Platform, Animated, ActivityIndicator,
+  Platform, Animated, ActivityIndicator, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Theme } from '../theme/theme';
@@ -23,10 +23,11 @@ import { StatusBanner } from '../components/StatusBanner';
 import { useEffect } from 'react';
 import { AIBubble } from '../components/AIBubble';
 import { ThinkingIndicator } from '../components/ThinkingIndicator';
-import { ChatStore, ChatMessage as PersistedMessage } from '../../core/storage/ChatStore';
-import { MemoryCondenser } from '../../core/memory/MemoryCondenser';
-import { SemanticMemoryInstance } from '../../core/memory/SemanticMemory';
+import { ChatStore } from '../../core/storage/ChatStore';
+import { HierarchicalStore } from '../../core/memory/HierarchicalMemoryStore';
 import { RichText } from '../components/RichText';
+import { EventBus } from '../../core/bus/EventBus';
+import { ResourcePlanner } from '../../core/planner/ResourcePlanner';
 
 import type { GeneratedDiagram } from '../../skills/DiagramGenerator';
 
@@ -75,7 +76,7 @@ export const MentorChat: React.FC<Props> = ({ route, navigation }) => {
   
   const flatListRef = useRef<FlatList>(null);
   const isUserScrolling = useRef(false);
-  const inputRef = useRef<TextInput>(null);
+
 
   // Convergence polling
   useEffect(() => {
@@ -92,6 +93,26 @@ export const MentorChat: React.FC<Props> = ({ route, navigation }) => {
   }, []);
 
   useEffect(() => {
+    const loadChatHistory = async () => {
+      await TutorOrchestrator.setTopic(topic, subtopicName);
+      
+      const history = await ChatStore.loadMessages(topic);
+      if (history.length > 0) {
+        setMessages(history);
+      } else {
+        // Default initial message
+        setMessages([
+          {
+            id: '0',
+            role: 'ai',
+            content: `I'm your Padh.ai mentor. Let's work on **${topic}** together.\n\nRemember — I won't hand you answers. I'll guide you to discover them yourself.\n\nWhat do you already know about this topic? Let's see where you stand.`,
+            skillUsed: 'BreadthSweeper',
+            timestamp: Date.now(),
+          },
+        ]);
+      }
+    };
+
     loadChatHistory();
     // Initial state
     setActiveModule(ModuleManager.getCurrentModule());
@@ -103,30 +124,8 @@ export const MentorChat: React.FC<Props> = ({ route, navigation }) => {
 
     return () => {
       unsubscribe();
-      // Generate cheatsheet on unmount if we have enough messages
-      if (messagesRef.current.length > 2 && messagesRef.current.length < 30) {
-        MemoryCondenser.generateSessionCheatsheet(topic, messagesRef.current as any);
-      }
     };
-  }, [topic]);
-
-  const loadChatHistory = async () => {
-    const history = await ChatStore.loadMessages(topic);
-    if (history.length > 0) {
-      setMessages(history);
-    } else {
-      // Default initial message
-      setMessages([
-        {
-          id: '0',
-          role: 'ai',
-          content: `I'm your Padh.ai mentor. Let's work on **${topic}** together.\n\nRemember — I won't hand you answers. I'll guide you to discover them yourself.\n\nWhat do you already know about this topic? Let's see where you stand.`,
-          skillUsed: 'BreadthSweeper',
-          timestamp: Date.now(),
-        },
-      ]);
-    }
-  };
+  }, [topic, subtopicName]);
 
   // Auto-save when messages change (and aren't streaming)
   useEffect(() => {
@@ -177,6 +176,18 @@ export const MentorChat: React.FC<Props> = ({ route, navigation }) => {
     setIsGenerating(true);
     isUserScrolling.current = false;
 
+    const startTime = Date.now();
+    
+    // EventBus: Emit user message event
+    EventBus.emitSync('user:message', {
+      text: input.trim(),
+      topic: topic,
+      timestamp: Date.now()
+    });
+    
+    // Request foreground access (preempts background tasks)
+    await ResourcePlanner.requestForegroundAccess();
+
     try {
       const manualCommand = ModuleManager.userInvokeModule(input.trim());
       if (manualCommand) {
@@ -206,22 +217,28 @@ export const MentorChat: React.FC<Props> = ({ route, navigation }) => {
         lastStreamUpdate.current = Date.now();
       };
 
+      // USE OPTIMIZED CONTEXT MANAGEMENT PIPELINE (same as OnboardingChat)
+      // TutorOrchestrator now handles ContextBudget/ContextWindow internally
       const response = await TutorOrchestrator.handleMessage(
         input.trim(), 
         (token: string) => {
           fullContent += token;
           
-          const match = fullContent.match(/^\[SKILL:([a-zA-Z]+)\]\s*/);
-          if (match) {
-            detectedSkill = match[1];
-            displayedContent = fullContent.substring(match[0].length);
+          // Match both [SKILL:...] and [SWITCH_SKILL: ...]
+          const skillMatch = fullContent.match(/^\[(?:SKILL|SWITCH_SKILL):\s*([a-zA-Z]+)\]\s*/);
+          if (skillMatch) {
+            detectedSkill = skillMatch[1];
+            displayedContent = fullContent.substring(skillMatch[0].length);
             setActiveSkill(detectedSkill);
           } else if (fullContent.startsWith('[')) {
-            if (fullContent.includes(']') && !fullContent.startsWith('[SKILL:')) {
+            // Hide any other bracketed metadata until we see the closing bracket
+            if (fullContent.includes(']') && !fullContent.match(/^\[(?:SKILL|SWITCH_SKILL):/)) {
               displayedContent = fullContent;
             } else if (fullContent.length > 40) {
+              // If it's too long and still no closing bracket, show it anyway
               displayedContent = fullContent;
             } else {
+              // Still waiting for closing bracket
               displayedContent = '';
             }
           } else {
@@ -242,8 +259,8 @@ export const MentorChat: React.FC<Props> = ({ route, navigation }) => {
           }
         },
         undefined, // customSystemPrompt
-        // Pass only last 4 messages — ContextBudget caps at MAX_HISTORY_TURNS=3 anyway
-        messages.slice(-4).map(m => ({ 
+        // Pass recent messages - TutorOrchestrator applies ContextWindow + ContextBudget
+        messages.slice(-10).map(m => ({ 
           role: m.role === 'ai' ? 'assistant' : 'user', 
           content: m.content 
         }))
@@ -266,30 +283,55 @@ export const MentorChat: React.FC<Props> = ({ route, navigation }) => {
         last.diagrams = response.diagrams;
         return [...updated];
       });
+      
+      // EventBus: Emit AI response event
+      const duration = Date.now() - startTime;
+      const estimatedTokens = Math.ceil(fullContent.length / 4);
+      EventBus.emitSync('ai:response', {
+        text: fullContent,
+        topic: topic,
+        duration,
+        tokensUsed: estimatedTokens,
+        userMsg: input.trim(),
+        activeSkill: detectedSkill || undefined
+      });
 
       // 5. Extract semantic facts for long-term memory
-      const facts = SemanticMemoryInstance.extractFacts(input.trim(), fullContent);
-      if (facts.length > 0) {
-        SemanticMemoryInstance.addFacts(facts).catch(err => 
-          console.warn('[MentorChat] Failed to save semantic facts:', err)
-        );
-      }
+      await HierarchicalStore.processExchange(input.trim(), fullContent);
+      
+      // EventBus: Emit memory update event
+      EventBus.emitSync('memory:updated', {
+        factCount: 1, // processExchange doesn't return count, so we use 1 as indicator
+        topic: topic
+      });
 
-    } catch (e: any) {
+    } catch {
+      Alert.alert(
+        "Engine Error",
+        "I'm having trouble connecting to my local inference engine. Please check if the model is downloaded in Settings."
+      );
       setMessages(prev => {
         const updated = [...prev];
-        const last = updated[updated.length - 1];
-        last.content = "I'm having trouble connecting to my local inference engine. Please check if the model is downloaded in Settings.";
-        last.isStreaming = false;
-        last.skillUsed = 'SystemError';
+        if (updated.length > 0) {
+          const last = updated[updated.length - 1];
+          if (last.isStreaming && (!last.content || last.content === '💭')) {
+            updated.pop();
+          } else {
+            last.isStreaming = false;
+            last.skillUsed = 'SystemError';
+          }
+        }
         return [...updated];
       });
+    } finally {
+      // Release foreground access (resumes background tasks)
+      ResourcePlanner.releaseForegroundAccess();
     }
 
     setIsGenerating(false);
     isUserScrolling.current = false;
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 150);
-  }, [input, isGenerating, activeSkill]);
+  }, [input, isGenerating, activeSkill, messages, topic]);
 
   const handleCameraPress = useCallback(async () => {
     if (isGenerating) return;

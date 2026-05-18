@@ -8,6 +8,7 @@
 import { DiagramOrchestrator, DiagramContext } from './DiagramOrchestrator';
 import { ParallelLLMManager } from '../api/ParallelLLMManager';
 import { DiagramAI } from '../../skills/DiagramAIIntegration';
+import { USE_DIRECT_LITERT } from '../api/LocalServerManager';
 import { ModelManager } from '../api/ModelManager';
 import type { GeneratedDiagram } from '../../skills/DiagramGenerator';
 
@@ -69,6 +70,12 @@ class ConceptTeacherDiagramIntegrationService {
 
     const diagramDecisions = DiagramOrchestrator.detectMultipleDiagrams(diagramContext);
     console.log('[ConceptTeacher] Diagram decisions:', diagramDecisions);
+
+    // If direct LiteRT engine is enabled, force sequential execution to avoid OOM/std::bad_alloc crash
+    if (USE_DIRECT_LITERT) {
+      console.log('[ConceptTeacher] Direct LiteRT engine is active. Forcing sequential execution to avoid concurrent model calls.');
+      return await this.executeSequential(userMessage, context, diagramDecisions);
+    }
 
     // 3. Execute in parallel: Text + Diagrams
     try {
@@ -201,13 +208,21 @@ class ConceptTeacherDiagramIntegrationService {
     const systemPrompt = this.buildSystemPrompt(context, additionalContext);
     const userPrompt = this.buildUserPrompt(userMessage, context);
 
+    const messages: { role: 'user' | 'assistant' | 'system'; content: string }[] = [
+      { role: 'system', content: systemPrompt }
+    ];
+
+    if (context.sessionHistory && context.sessionHistory.length > 0) {
+      // Map roles if needed, but assuming they match 'user' | 'assistant' | 'system'
+      messages.push(...context.sessionHistory);
+    }
+
+    messages.push({ role: 'user', content: userPrompt });
+
     // Use ModelManager's streamChat for better control
     let fullText = '';
     await ModelManager.streamChat(
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage }
-      ],
+      messages,
       (delta) => {
         fullText += delta;
         if (onToken) onToken(delta);
@@ -256,8 +271,8 @@ Current Topic: ${context.currentTopic}
 Difficulty: ${context.difficulty}/100
 
 Teaching Style:
-- Use Socratic method - ask questions to guide understanding.
-- Explain concepts clearly with examples.
+- Explain a specific concept clearly, using relatable analogies.
+- Do not ask questions yet, just provide a clear, concise explanation.
 - Use Hindi/English mix (Hinglish) when appropriate.
 - **ALWAYS use LaTeX/KaTeX for mathematical formulas, derivations, and chemical equations.**
 - Wrap small inline math in $...$.

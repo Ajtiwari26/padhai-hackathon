@@ -10,6 +10,7 @@
  * 6. Mock Test (Summative Assessment)
  * 7. Key Points (Quick Revision)
  */
+import { EventBus } from '../bus/EventBus';
 
 export type ModuleType = 
   | 'concept_class'
@@ -40,6 +41,17 @@ class ModuleManagerService {
   private currentModule: ModuleContext | null = null;
   private moduleHistory: ModuleContext[] = [];
   private listeners: ((module: ModuleContext | null) => void)[] = [];
+
+  constructor() {
+    this.subscribeToEvents();
+  }
+
+  private subscribeToEvents(): void {
+    EventBus.on('topic:convergence', (data) => {
+      console.log('[ModuleManager] Topic convergence event received:', data);
+      // Auto-switch logic or state update can be added here
+    });
+  }
 
   subscribe(listener: (module: ModuleContext | null) => void): () => void {
     this.listeners.push(listener);

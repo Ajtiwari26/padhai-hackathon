@@ -1,26 +1,34 @@
 import { ResourceStore, ResourceTask } from '../storage/ResourceStore';
-import { AdaptiveQuestionGenerator } from '../questions/AdaptiveQuestionGenerator';
-import { AISyllabusGenerator } from '../curriculum/AISyllabusGenerator';
-import { TestGenerator } from '../tests/TestGenerator';
-import { DPPGenerator } from '../tests/DPPGenerator';
-import { SummaryGenerator } from '../tests/SummaryGenerator';
+import { EventBus } from '../bus/EventBus';
+import { TaskHandlerRegistry } from './TaskHandlerRegistry';
+import { SyllabusHandler } from './handlers/SyllabusHandler';
+import { SubtopicHandler } from './handlers/SubtopicHandler';
+import { McqHandler } from './handlers/McqHandler';
+import { NumericalHandler } from './handlers/NumericalHandler';
+import { TestHandler } from './handlers/TestHandler';
+import { DppHandler } from './handlers/DppHandler';
+import { SummaryHandler } from './handlers/SummaryHandler';
 
 class ResourcePlannerService {
   private isRunning = false;
   private isPaused = false;
   private taskInterval: ReturnType<typeof setInterval> | null = null;
+  private eventUnsubscribers: Array<() => void> = [];
+  private currentTask: ResourceTask | null = null;
+  private foregroundAbortController: AbortController | null = null;
+  private isForegroundActive = false;
   
   // Weights for priority sorting
   private readonly PRIORITY_MAP: Record<string, number> = {
-    'syllabus': 1,
-    'subtopic': 2,
-    'mcq': 3,
-    'numerical': 4,
-    'test': 5,
-    'dpp': 6,
-    'summary': 7,
-    'mcq_batch': 3,
-    'numerical_batch': 4,
+    'syllabus': 100,
+    'subtopic': 200,
+    'mcq': 300,
+    'numerical': 400,
+    'test': 500,
+    'dpp': 600,
+    'summary': 700,
+    'mcq_batch': 300,
+    'numerical_batch': 400,
   };
 
   /**
@@ -30,10 +38,16 @@ class ResourcePlannerService {
     if (this.isRunning) return;
     this.isRunning = true;
     
+    // Register all task handlers
+    this.registerHandlers();
+    
     // Clean up any tasks that were left in 'running' state (e.g. after a crash)
     await this.cleanupStaleTasks();
     
     console.log('[ResourcePlanner] Scheduler started');
+    
+    // Subscribe to events
+    this.subscribeToEvents();
     
     // Check queue every 10 seconds
     this.taskInterval = setInterval(() => {
@@ -44,13 +58,188 @@ class ResourcePlannerService {
     this.processNextTask();
   }
 
+  /**
+   * Register all task handlers with the registry
+   */
+  private registerHandlers(): void {
+    TaskHandlerRegistry.register(new SyllabusHandler());
+    TaskHandlerRegistry.register(new SubtopicHandler());
+    TaskHandlerRegistry.register(new McqHandler());
+    TaskHandlerRegistry.register(new NumericalHandler());
+    TaskHandlerRegistry.register(new TestHandler());
+    TaskHandlerRegistry.register(new DppHandler());
+    TaskHandlerRegistry.register(new SummaryHandler());
+    console.log('[ResourcePlanner] All task handlers registered');
+  }
+
   public stop() {
     this.isRunning = false;
     if (this.taskInterval) {
       clearInterval(this.taskInterval);
       this.taskInterval = null;
     }
+    
+    // Unsubscribe from events
+    this.unsubscribeFromEvents();
+    
     console.log('[ResourcePlanner] Scheduler stopped');
+  }
+
+  /**
+   * Subscribe to Event Bus events
+   */
+  private subscribeToEvents(): void {
+    // Process chapter enrichment tasks when chapters are enriched
+    const unsubChapterEnriched = EventBus.on('chapter:enriched', (data) => {
+      console.log('[ResourcePlanner] 📚 Chapter enriched, checking for dependent tasks', data);
+      // Could trigger follow-up tasks here
+    });
+    
+    // Store unsubscribers
+    this.eventUnsubscribers.push(unsubChapterEnriched);
+  }
+
+  /**
+   * Unsubscribe from all events
+   */
+  private unsubscribeFromEvents(): void {
+    this.eventUnsubscribers.forEach(unsub => unsub());
+    this.eventUnsubscribers = [];
+  }
+
+  /**
+   * Request foreground access for chat (preempts background tasks)
+   * Called by MentorChat/OnboardingChat before inference
+   */
+  public async requestForegroundAccess(): Promise<void> {
+    this.isForegroundActive = true;
+    
+    if (this.currentTask && this.currentTask.priority > 0) {
+      // Background task is running, abort it
+      console.log('[ResourcePlanner] 🚨 Preempting background task for foreground chat');
+      
+      if (this.foregroundAbortController) {
+        this.foregroundAbortController.abort();
+      }
+      
+      // Mark task as queued again (will retry later)
+      this.currentTask.status = 'queued';
+      await ResourceStore.saveTask(this.currentTask);
+      this.currentTask = null;
+      
+      EventBus.emitSync('resource:paused', { reason: 'foreground_chat' });
+    }
+  }
+  
+  /**
+   * Release foreground access (resumes background tasks)
+   * Called by MentorChat/OnboardingChat after inference completes
+   */
+  public releaseForegroundAccess(): void {
+    this.isForegroundActive = false;
+    console.log('[ResourcePlanner] ✅ Foreground access released, resuming background tasks');
+    
+    EventBus.emitSync('resource:resumed', { reason: 'chat_complete' });
+    
+    // Process next task after 2s delay to let model settle
+    setTimeout(() => this.processNextTask(), 2000);
+  }
+  
+  /**
+   * Get current running task (for UI display)
+   */
+  public getCurrentTask(): ResourceTask | null {
+    return this.currentTask;
+  }
+  
+  /**
+   * Pause a specific task
+   */
+  public async pauseTask(taskId: string): Promise<void> {
+    const task = await ResourceStore.getTaskById(taskId);
+    if (!task) return;
+    
+    task.isPaused = true;
+    task.status = 'paused';
+    await ResourceStore.saveTask(task);
+    
+    // If this is the current task, abort it
+    if (this.currentTask?.id === taskId) {
+      if (this.foregroundAbortController) {
+        this.foregroundAbortController.abort();
+      }
+      this.currentTask = null;
+    }
+    
+    console.log('[ResourcePlanner] Task paused:', taskId);
+  }
+  
+  /**
+   * Resume a paused task
+   */
+  public async resumeTask(taskId: string): Promise<void> {
+    const task = await ResourceStore.getTaskById(taskId);
+    if (!task) return;
+    
+    task.isPaused = false;
+    task.status = 'queued';
+    await ResourceStore.saveTask(task);
+    
+    console.log('[ResourcePlanner] Task resumed:', taskId);
+    this.processNextTask();
+  }
+  
+  /**
+   * Skip a task (mark as skipped, remove from queue)
+   */
+  public async skipTask(taskId: string): Promise<void> {
+    const task = await ResourceStore.getTaskById(taskId);
+    if (!task) return;
+    
+    task.isSkipped = true;
+    task.status = 'skipped';
+    await ResourceStore.saveTask(task);
+    
+    // If this is the current task, abort it
+    if (this.currentTask?.id === taskId) {
+      if (this.foregroundAbortController) {
+        this.foregroundAbortController.abort();
+      }
+      this.currentTask = null;
+    }
+    
+    console.log('[ResourcePlanner] Task skipped:', taskId);
+    this.processNextTask();
+  }
+  
+  /**
+   * Prioritize a task (move to top of queue)
+   */
+  public async prioritizeTask(taskId: string): Promise<void> {
+    const task = await ResourceStore.getTaskById(taskId);
+    if (!task) return;
+    
+    task.userPriority = 1; // Highest user priority
+    await ResourceStore.saveTask(task);
+    
+    console.log('[ResourcePlanner] Task prioritized:', taskId);
+    this.processNextTask();
+  }
+  
+  /**
+   * Update task priorities after drag-to-reorder
+   */
+  public async reorderTasks(orderedTaskIds: string[]): Promise<void> {
+    for (let i = 0; i < orderedTaskIds.length; i++) {
+      const task = await ResourceStore.getTaskById(orderedTaskIds[i]);
+      if (task) {
+        task.userPriority = i + 1; // 1 = highest priority
+        await ResourceStore.saveTask(task);
+      }
+    }
+    
+    console.log('[ResourcePlanner] Tasks reordered');
+    this.processNextTask();
   }
 
   public pause() {
@@ -145,27 +334,60 @@ class ResourcePlannerService {
     type: ResourceTask['type'], 
     chapterId: string, 
     subtopic: string = '', 
-    metadata: any = {}
+    metadata: any = {},
+    userInitiated: boolean = false
   ) {
-    const priority = this.PRIORITY_MAP[type] || 10;
+    const basePriority = this.PRIORITY_MAP[type] || 1000;
     
     const task: ResourceTask = {
       id: `task_${Date.now()}_${Math.random().toString(36).substring(7)}`,
       type,
       chapterId,
+      chapterName: metadata?.chapterData?.name || chapterId, // Use chapter name if available
       subtopic,
-      priority,
+      priority: basePriority,
+      basePriority,
       status: 'queued',
       createdAt: Date.now(),
       metadata,
-      retryCount: 0
+      retryCount: 0,
+      isPaused: false,
+      isSkipped: false,
+      userInitiated
     };
 
     ResourceStore.saveTask(task);
-    console.log(`[ResourcePlanner] Queued task: ${type} for ${chapterId}`);
+    console.log(`[ResourcePlanner] Queued task: ${type} for ${task.chapterName || chapterId}${userInitiated ? ' (USER-INITIATED)' : ''}`);
+    
+    // If user-initiated, pause other tasks for this chapter
+    if (userInitiated) {
+      this.pauseOtherChapterTasks(chapterId, task.id);
+    }
     
     // Attempt to process immediately if not currently busy
     this.processNextTask();
+  }
+  
+  /**
+   * Pause all tasks for a chapter except the specified task
+   */
+  private async pauseOtherChapterTasks(chapterId: string, exceptTaskId: string): Promise<void> {
+    const allTasks = await ResourceStore.getAllTasks();
+    const chapterTasks = allTasks.filter(t => 
+      t.chapterId === chapterId && 
+      t.id !== exceptTaskId && 
+      (t.status === 'queued' || t.status === 'running')
+    );
+    
+    for (const task of chapterTasks) {
+      task.isPaused = true;
+      task.status = 'paused';
+      await ResourceStore.saveTask(task);
+    }
+    
+    if (chapterTasks.length > 0) {
+      console.log(`[ResourcePlanner] Paused ${chapterTasks.length} other tasks for chapter ${chapterId}`);
+    }
   }
 
   /**
@@ -175,6 +397,12 @@ class ResourcePlannerService {
     // Check if paused
     if (this.isPaused) {
       console.log('[ResourcePlanner] ⏸️  Scheduler is paused');
+      return;
+    }
+    
+    // Check if foreground is active (chat in progress)
+    if (this.isForegroundActive) {
+      console.log('[ResourcePlanner] 💬 Foreground chat active, deferring background tasks');
       return;
     }
 
@@ -190,103 +418,59 @@ class ResourcePlannerService {
       // Quiet check - no pending work
       return;
     }
+    
+    // Filter out paused and skipped tasks
+    const eligibleTasks = pendingTasks.filter(t => !t.isPaused && !t.isSkipped);
+    if (eligibleTasks.length === 0) {
+      console.log('[ResourcePlanner] No eligible tasks (all paused/skipped)');
+      return;
+    }
 
-    // Sort by priority (lower number = higher priority), then by age
-    pendingTasks.sort((a, b) => {
-      if (a.priority !== b.priority) return a.priority - b.priority;
-      return a.createdAt - b.createdAt;
+    // Sort by effective priority (user-initiated > user priority > base priority)
+    eligibleTasks.sort((a, b) => {
+      // User-initiated tasks always come first
+      if (a.userInitiated && !b.userInitiated) return -1;
+      if (!a.userInitiated && b.userInitiated) return 1;
+      
+      const aPriority = a.userPriority ?? a.basePriority ?? a.priority;
+      const bPriority = b.userPriority ?? b.basePriority ?? b.priority;
+      
+      if (aPriority !== bPriority) return aPriority - bPriority;
+      return a.createdAt - b.createdAt; // Older tasks first within same priority
     });
 
-    const taskToRun = pendingTasks[0];
-    console.log(`[ResourcePlanner] 📋 Queue size: ${pendingTasks.length}. Selecting highest priority: ${taskToRun.type} (${taskToRun.id})`);
+    const taskToRun = eligibleTasks[0];
+    console.log(`[ResourcePlanner] 📋 Queue size: ${eligibleTasks.length}. Selecting highest priority: ${taskToRun.type} (priority: ${taskToRun.userPriority ?? taskToRun.basePriority})`);
     
     // Mark as running
     taskToRun.status = 'running';
+    this.currentTask = taskToRun;
+    this.foregroundAbortController = new AbortController();
     await ResourceStore.saveTask(taskToRun);
 
     try {
       console.log(`[ResourcePlanner] Executing task: ${taskToRun.type} for ${taskToRun.chapterId}`);
       
+      // Use the task handler registry
+      const handler = TaskHandlerRegistry.getHandler(taskToRun.type);
+      
       let result;
-      switch (taskToRun.type) {
-        case 'syllabus':
-          // The outline is generated in the UI usually, but could be backgrounded
-          break;
-        case 'subtopic':
-          // Pass subject context from metadata to ensure AI has full context for chapter enrichment
-          result = await AISyllabusGenerator.generateChapterDetail(
-            taskToRun.metadata.chapterData, 
-            taskToRun.metadata.subjectContext || "", 
-            'background'
-          );
-          if (result) {
-            const subtopicsCount = result.subtopics?.length || 0;
-            console.log(`[ResourcePlanner] Chapter '${result.name}' enriched with ${subtopicsCount} subtopics.`);
-            await AISyllabusGenerator.updateChapter(result);
-          }
-          break;
-        case 'mcq':
-          result = await AdaptiveQuestionGenerator.generate({
-            topic: taskToRun.chapterId,
-            subtopic: taskToRun.subtopic,
-            concepts: [taskToRun.subtopic],
-            difficulty: taskToRun.metadata.difficulty || 50,
-            mathComplexity: 'algebra',
-            thinkingDepth: 'application',
-            studentUnderstanding: 50,
-            previousAttempts: { correct: 0, wrong: 0, avgTime: 0 },
-            type: 'mcq',
-            style: 'conceptual'
-          }, 'background');
-          break;
-        case 'numerical':
-          result = await AdaptiveQuestionGenerator.generate({
-            topic: taskToRun.chapterId,
-            subtopic: taskToRun.subtopic,
-            concepts: [taskToRun.subtopic],
-            difficulty: taskToRun.metadata.difficulty || 60,
-            mathComplexity: 'algebra',
-            thinkingDepth: 'application',
-            studentUnderstanding: 50,
-            previousAttempts: { correct: 0, wrong: 0, avgTime: 0 },
-            type: 'numerical',
-            style: 'direct'
-          }, 'background');
-          break;
-        case 'test':
-          result = await TestGenerator.generate({
-            chapterId: taskToRun.chapterId,
-            chapterName: taskToRun.metadata.chapterName || taskToRun.chapterId,
-            subtopics: taskToRun.metadata.subtopics || [],
-            subject: taskToRun.metadata.subject || 'General',
-            questionCount: taskToRun.metadata.questionCount || 15,
-            difficulty: taskToRun.metadata.difficulty || 60,
-            timeLimit: taskToRun.metadata.timeLimit || 45
-          });
-          break;
-        case 'dpp':
-          result = await DPPGenerator.generate({
-            chapters: taskToRun.metadata.chapters || [{ id: taskToRun.chapterId, name: taskToRun.chapterId }],
-            subject: taskToRun.metadata.subject || 'General',
-            problemCount: taskToRun.metadata.problemCount || 10,
-            difficulty: taskToRun.metadata.difficulty || 60,
-            date: taskToRun.metadata.date || new Date().toISOString().split('T')[0]
-          });
-          break;
-        case 'summary':
-          result = await SummaryGenerator.generate({
-            chapterId: taskToRun.chapterId,
-            chapterName: taskToRun.metadata.chapterName || taskToRun.chapterId,
-            subtopics: taskToRun.metadata.subtopics || [],
-            subject: taskToRun.metadata.subject || 'General',
-            detailLevel: taskToRun.metadata.detailLevel || 'detailed'
-          });
-          break;
+      if (handler) {
+        result = await handler.execute(taskToRun);
+      } else {
+        console.warn(`[ResourcePlanner] No handler registered for task type: ${taskToRun.type}`);
       }
 
       taskToRun.status = 'done';
       taskToRun.result = result;
       console.log(`[ResourcePlanner] Task complete: ${taskToRun.type}`);
+      
+      // Emit resource generated event
+      EventBus.emitSync('resource:generated', {
+        type: taskToRun.type,
+        topic: taskToRun.chapterId,
+        duration: Date.now() - taskToRun.createdAt
+      });
 
     } catch (error: any) {
       const errorMsg = error.message || String(error);
@@ -309,6 +493,8 @@ class ResourcePlannerService {
         taskToRun.status = 'failed';
       }
     } finally {
+      this.currentTask = null;
+      this.foregroundAbortController = null;
       await ResourceStore.saveTask(taskToRun);
       
       // Trigger next task if any with a small delay to let model engine settle

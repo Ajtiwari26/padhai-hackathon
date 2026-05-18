@@ -10,10 +10,15 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.padhai.modules.llm.InferenceEngine
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import com.padhai.modules.llm.MediaPipeInference
 import com.padhai.modules.llm.LiteRTInference
 import com.padhai.modules.llm.ServerLifecycleService
+import com.padhai.CoreSelector
 
 class PadhLiteRTModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
@@ -25,6 +30,7 @@ class PadhLiteRTModule(private val reactContext: ReactApplicationContext) : Reac
     private val mediaPipeEngine = MediaPipeInference(reactContext)
     private val liteRTEngine = LiteRTInference(reactContext)
     private var activeEngine: InferenceEngine? = null
+    private val coreSelector = CoreSelector(reactContext)
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(className: ComponentName, service: IBinder) {
@@ -122,6 +128,22 @@ class PadhLiteRTModule(private val reactContext: ReactApplicationContext) : Reac
     }
 
     @ReactMethod
+    fun setCorePriority(mode: String, promise: Promise) {
+        try {
+            val strategy = when (mode) {
+                "foreground" -> com.padhai.CoreStrategy.FOREGROUND
+                "background" -> com.padhai.CoreStrategy.BACKGROUND
+                "efficiency" -> com.padhai.CoreStrategy.EFFICIENCY
+                else -> com.padhai.CoreStrategy.BALANCED
+            }
+            coreSelector.setCoreAffinity(strategy)
+            promise.resolve("Priority set to $mode")
+        } catch (e: Exception) {
+            promise.reject("PRIORITY_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
     fun addListener(eventName: String) {
         // Keep: Required for RN built in Event Emitter Calls.
     }
@@ -129,5 +151,73 @@ class PadhLiteRTModule(private val reactContext: ReactApplicationContext) : Reac
     @ReactMethod
     fun removeListeners(count: Int) {
         // Keep: Required for RN built in Event Emitter Calls.
+    }
+
+    @ReactMethod
+    fun loadEngineDirect(modelPath: String, maxTokens: Int, temp: Double, useGpu: Boolean, promise: Promise) {
+        try {
+            // If the engine was already loaded by startServer(), reuse it.
+            // This prevents the #1 crash: double-loading wastes ~1.5GB RAM
+            // and corrupts native state (causing 0-token responses).
+            if (liteRTEngine.isModelLoaded()) {
+                Log.i("PadhLiteRT", "Engine already loaded (reusing from server). Skipping double-load.")
+                activeEngine = liteRTEngine
+                promise.resolve("Engine already loaded (reused from server)")
+                return
+            }
+            liteRTEngine.loadModel(modelPath, maxTokens, temp.toFloat(), 40, useGpu)
+            activeEngine = liteRTEngine
+            promise.resolve("Engine loaded directly")
+        } catch (e: Exception) {
+            promise.reject("LOAD_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun generateResponseDirect(prompt: String, promise: Promise) {
+        if (activeEngine == null) {
+            promise.reject("ERROR", "No engine loaded. Call loadEngineDirect first.")
+            return
+        }
+        try {
+            val response = activeEngine!!.generateResponseSync(prompt)
+            promise.resolve(response)
+        } catch (e: Exception) {
+            promise.reject("GEN_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun generateResponseStreamDirect(prompt: String) {
+        if (activeEngine == null) {
+            Log.e("PadhLiteRT", "No engine loaded for streaming")
+            // Emit error event so JS side doesn't wait 15s for timeout
+            reactContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit("generation_error", "No engine loaded")
+            return
+        }
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                activeEngine!!.generateResponseAsync(prompt).collect { chunk ->
+                    reactContext
+                        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                        .emit("onToken", chunk)
+                }
+                // Signal completion to JS — this was MISSING before,
+                // causing the JS side to always wait for the 15s timeout.
+                reactContext
+                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("generation_complete", "")
+                Log.d("PadhLiteRT", "Stream generation completed successfully")
+            } catch (e: Exception) {
+                Log.e("PadhLiteRT", "Streaming failed", e)
+                // Signal error to JS — this was MISSING before.
+                // Without this, JS waits the full 15s timeout on every error.
+                reactContext
+                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("generation_error", e.message ?: "Unknown streaming error")
+            }
+        }
     }
 }

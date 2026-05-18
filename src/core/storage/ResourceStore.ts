@@ -1,19 +1,42 @@
-import { createMMKV } from 'react-native-mmkv';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const storage = createMMKV({ id: 'padh-resource-store' });
+const STORAGE_KEY = 'padh-resource-tasks';
 
 export interface ResourceTask {
   id: string;
   type: 'syllabus' | 'subtopic' | 'mcq' | 'numerical' | 'test' | 'dpp' | 'summary' | 'mcq_batch' | 'numerical_batch';
   chapterId: string;
+  chapterName?: string; // Human-readable chapter name for display
   subtopic: string;
   priority: number;
-  status: 'queued' | 'running' | 'done' | 'failed';
+  status: 'queued' | 'running' | 'done' | 'failed' | 'paused' | 'skipped';
   createdAt: number;
   metadata?: any;
   result?: any;
   retryCount?: number;
   lastError?: string;
+  
+  // Enhanced priority and control
+  userPriority?: number; // User override (1-100, lower = higher priority)
+  basePriority?: number; // System default priority
+  isPaused?: boolean; // Per-task pause
+  isSkipped?: boolean; // User skipped this task
+  userInitiated?: boolean; // User manually triggered this task (highest priority)
+  
+  // Subtask tracking for progress
+  subtasks?: SubTask[];
+  currentSubtask?: number;
+  
+  // Resume capability
+  partialResult?: any; // Partial progress for interrupted tasks
+  streamingContent?: string; // Streaming content for real-time display
+}
+
+export interface SubTask {
+  id: string;
+  name: string; // e.g., "Generating subtopic 1/5"
+  status: 'pending' | 'running' | 'done' | 'failed';
+  progress: number; // 0-100
 }
 
 class ResourceStoreService {
@@ -36,15 +59,20 @@ class ResourceStoreService {
     } else {
       tasks.push(task);
     }
-    storage.set('resource_tasks', JSON.stringify(tasks));
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
   }
 
   /**
    * Get all tasks
    */
   public async getAllTasks(): Promise<ResourceTask[]> {
-    const raw = storage.getString('resource_tasks');
-    return raw ? JSON.parse(raw) : [];
+    try {
+      const raw = await AsyncStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      console.error('[ResourceStore] Failed to read tasks:', e);
+      return [];
+    }
   }
 
   /**
@@ -69,7 +97,7 @@ class ResourceStoreService {
   public async deleteTask(taskId: string): Promise<void> {
     const tasks = await this.getAllTasks();
     const filtered = tasks.filter(t => t.id !== taskId);
-    storage.set('resource_tasks', JSON.stringify(filtered));
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
   }
 
   /**
@@ -132,8 +160,8 @@ class ResourceStoreService {
   /**
    * Clear tasks (useful for resetting/debugging)
    */
-  public clearAll(): void {
-    storage.set('resource_tasks', JSON.stringify([]));
+  public async clearAll(): Promise<void> {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify([]));
   }
 }
 
