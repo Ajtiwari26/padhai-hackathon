@@ -59,7 +59,7 @@ Output ONLY the structured cheatsheet. No conversational filler.
 
     try {
       console.log(`[MemoryCondenser] Generating cheatsheet for ${topic}...`);
-      const summary = await ModelManager.generate(prompt);
+      const summary = await ModelManager.generate(prompt, 'background', undefined, undefined, false);
       
       // Save it to ChatStore
       await ChatStore.saveSessionSummary(topic, summary);

@@ -11,10 +11,14 @@ export const ToolRegistry = {
   /**
    * search_memory: Semantic search for personal/academic facts.
    */
-  async search_memory(args: { query: string }): Promise<string> {
-    console.log('[Tool] search_memory:', args.query);
+  async search_memory(args: { query?: string; concept?: string; topic?: string }): Promise<string> {
+    const queryStr = args.query || args.concept || args.topic || '';
+    console.log('[Tool] search_memory:', queryStr);
+    if (!queryStr.trim()) {
+      return 'No query provided to search memory.';
+    }
     try {
-      const facts = await HierarchicalStore.searchContent(args.query, 5);
+      const facts = await HierarchicalStore.searchContent(queryStr, 5);
       if (facts && facts.length > 0) {
         return facts.map(f => f.content).join('\n');
       }

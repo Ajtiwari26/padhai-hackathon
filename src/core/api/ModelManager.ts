@@ -1,6 +1,7 @@
 import { LocalServerManager, USE_DIRECT_LITERT } from './LocalServerManager';
 import { ToolRegistry } from '../skills/ToolRegistry';
 import { NativeModules } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { EventBus } from '../bus/EventBus';
 import { KVCache } from '../memory/KVCacheManager';
 import { CoreSelector } from '../system/CoreSelector';
@@ -360,13 +361,18 @@ class ModelManagerService {
     includeTools: boolean = true,
     caveman: boolean = false
   ): Promise<string> {
-    console.log(`[ModelManager] streamChat() called. Priority: ${priority}, Messages: ${messages.length}, Port: ${portOverride || 'default'}, Tools: ${includeTools}, Caveman: ${caveman}`);
+    const normalizedMessages = messages.map(m => ({
+      ...m,
+      role: (m.role as string) === 'ai' ? 'assistant' : m.role
+    }));
+
+    console.log(`[ModelManager] streamChat() called. Priority: ${priority}, Messages: ${normalizedMessages.length}, Port: ${portOverride || 'default'}, Tools: ${includeTools}, Caveman: ${caveman}`);
     
     // Record activity to prevent auto-pause (CRITICAL: Do this FIRST)
     LocalServerManager.recordActivity();
     
     // Estimate tokens for event
-    const estimatedTokens = messages.reduce((sum, m) => sum + Math.ceil((m.content || '').length / 4), 0);
+    const estimatedTokens = normalizedMessages.reduce((sum, m) => sum + Math.ceil((m.content || '').length / 4), 0);
     
     // Emit inference start event
     EventBus.emitSync('inference:start', {
@@ -398,7 +404,36 @@ class ModelManagerService {
         }
       }
       const localConfig = (await LocalServerManager.getConfig()) as any;
-      console.log('[ModelManager] Local config loaded:', localConfig.enabled, localConfig.modelId);
+      console.log('[ModelManager] Local config loaded:', localConfig.enabled, localConfig.modelId, 'useCloud:', localConfig.useCloud);
+
+      if (localConfig.useCloud) {
+        console.log('[ModelManager] Routing to Cloud Inference via Groq API');
+        const result = await this._streamChatCloud(
+          normalizedMessages,
+          onToken,
+          localConfig,
+          signal,
+          priority,
+          effectiveMaxTokens,
+          includeTools,
+          caveman
+        );
+        
+        // KV Cache Compression
+        KVCache.addChunk(result);
+        
+        // Emit inference end event
+        const duration = Date.now() - startTime;
+        const actualTokens = Math.ceil(result.length / 4);
+        
+        EventBus.emitSync('inference:end', {
+          priority,
+          actualTokens,
+          duration
+        });
+        
+        return result;
+      }
 
       if (!localConfig.enabled) {
         console.warn('[ModelManager] Local AI disabled in settings');
@@ -417,7 +452,7 @@ class ModelManagerService {
       if (useDirect) {
         console.log('[ModelManager] 🚀 Using DIRECT LiteRT calls (MTP enabled)');
         result = await this._streamChatDirect(
-          messages,
+          normalizedMessages,
           onToken,
           localConfig,
           signal,
@@ -459,7 +494,7 @@ class ModelManagerService {
         
         try {
           result = await this._streamChatInternal(
-            messages,
+            normalizedMessages,
             onToken,
             port,
             localConfig,
@@ -964,6 +999,340 @@ class ModelManagerService {
    * <start_of_turn>model
    * [response]<end_of_turn>
    */
+  /**
+   * Streaming chat specifically routed to the Groq Cloud API.
+   */
+  private async _streamChatCloud(
+    messages: ChatMessage[],
+    onToken: (delta: string) => void,
+    localConfig: any,
+    signal?: AbortSignal,
+    priority: 'foreground' | 'background' = 'foreground',
+    maxOutputTokensOverride?: number,
+    includeTools: boolean = true,
+    caveman: boolean = false
+  ): Promise<string> {
+    const apiKey = localConfig.cloudApiKey;
+    if (!apiKey) {
+      throw new Error("Groq API Key is not configured. Please enter it in Settings.");
+    }
+
+    let finalMessages = [...messages];
+    if (caveman) {
+      finalMessages.unshift({ role: 'system', content: CAVEMAN_SYSTEM_PROMPT });
+    }
+
+    const endpoint = 'https://api.groq.com/openai/v1/chat/completions';
+    const model = localConfig.cloudModelId || 'llama-3.3-70b-versatile';
+
+    const payload: any = {
+      model,
+      messages: finalMessages.map(m => ({
+        role: m.role,
+        content: m.content,
+        ...(m.name ? { name: m.name } : {}),
+        ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+        ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {})
+      })),
+      temperature: localConfig.temperature ?? 0.2,
+      max_tokens: (maxOutputTokensOverride && maxOutputTokensOverride > 0)
+        ? maxOutputTokensOverride
+        : (localConfig.maxOutputTokens && localConfig.maxOutputTokens > 0)
+          ? localConfig.maxOutputTokens
+          : 4096,
+      stream: true,
+    };
+
+    if (includeTools) {
+      payload.tools = [
+        {
+          type: 'function',
+          function: {
+            name: 'search_memory',
+            description: 'Semantic search for personal/academic facts in the student database.',
+            parameters: {
+              type: 'object',
+              properties: {
+                query: {
+                  type: 'string',
+                  description: 'The search query to find relevant memories or facts.'
+                }
+              },
+              required: ['query']
+            }
+          }
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'generate_diagram',
+            description: 'Triggers the pedagogical diagram engine to generate a visual diagram (e.g. mindmap, flowchart).',
+            parameters: {
+              type: 'object',
+              properties: {
+                topic: {
+                  type: 'string',
+                  description: 'The topic or concept to create a diagram for.'
+                },
+                type: {
+                  type: 'string',
+                  description: 'The type of diagram (e.g. svg, flowchart).'
+                }
+              },
+              required: ['topic']
+            }
+          }
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'generate_quiz',
+            description: 'Fetches or creates MCQs (multiple choice questions) for the given topic.',
+            parameters: {
+              type: 'object',
+              properties: {
+                topic: {
+                  type: 'string',
+                  description: 'The topic or concept to test the student on.'
+                },
+                count: {
+                  type: 'number',
+                  description: 'The number of questions to generate (default is 2).'
+                }
+              },
+              required: ['topic']
+            }
+          }
+        }
+      ];
+    }
+
+    const fetchController = new AbortController();
+    const abortHandler = () => fetchController.abort();
+    if (signal) signal.addEventListener('abort', abortHandler);
+
+    const activeItem = { controller: fetchController, priority };
+    this.activeControllers.add(activeItem);
+
+    const timeoutMs = priority === 'foreground' ? 150000 : 120000;
+    const fetchTimeout = setTimeout(() => {
+      console.warn(`[ModelManager] Cloud Fetch timeout after ${timeoutMs / 1000}s`);
+      fetchController.abort();
+    }, timeoutMs);
+
+    try {
+      let fullText = '';
+      let sseBuffer = '';
+      const accumulatedToolCalls: any[] = [];
+
+      const processSSEChunk = async (chunk: string) => {
+        sseBuffer += chunk;
+        const lines = sseBuffer.split('\n');
+        sseBuffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+          const data = trimmed.slice(6).trim();
+          if (data === '[DONE]') continue;
+
+          try {
+            const parsed = JSON.parse(data);
+            const choice = parsed.choices?.[0];
+            const delta = choice?.delta;
+
+            if (delta?.tool_calls) {
+              const toolCalls = delta.tool_calls;
+              for (const tc of toolCalls) {
+                const idx = tc.index;
+                if (!accumulatedToolCalls[idx]) {
+                  accumulatedToolCalls[idx] = { function: {} };
+                }
+                const acc = accumulatedToolCalls[idx];
+                if (tc.id) acc.id = tc.id;
+                if (tc.type) acc.type = tc.type;
+                if (tc.function) {
+                  if (tc.function.name) acc.function.name = tc.function.name;
+                  if (tc.function.arguments) {
+                    acc.function.arguments = (acc.function.arguments || '') + tc.function.arguments;
+                  }
+                }
+              }
+            }
+
+            const content = delta?.content ?? null;
+            if (content !== null) {
+              fullText += content;
+              onToken(content);
+              await new Promise(r => setTimeout(() => r(null), 2));
+            }
+          } catch {
+            // Ignored parsing error for specific chunks
+          }
+        }
+      };
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(payload),
+        signal: fetchController.signal,
+        // @ts-ignore
+        reactNative: { textStreaming: true },
+      });
+
+      clearTimeout(fetchTimeout);
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => String(response.status));
+        throw new Error(`Cloud Inference Error ${response.status}: ${errText}`);
+      }
+
+      // Extract and save Groq rate limit headers
+      try {
+        const limitReq = response.headers.get('x-ratelimit-limit-requests');
+        const remainReq = response.headers.get('x-ratelimit-remaining-requests');
+        const limitTok = response.headers.get('x-ratelimit-limit-tokens');
+        const remainTok = response.headers.get('x-ratelimit-remaining-tokens');
+        const resetReq = response.headers.get('x-ratelimit-reset-requests');
+        const resetTok = response.headers.get('x-ratelimit-reset-tokens');
+
+        if (limitReq) await AsyncStorage.setItem('@padhai_groq_limit_requests', limitReq);
+        if (remainReq) await AsyncStorage.setItem('@padhai_groq_remaining_requests', remainReq);
+        if (limitTok) await AsyncStorage.setItem('@padhai_groq_limit_tokens', limitTok);
+        if (remainTok) await AsyncStorage.setItem('@padhai_groq_remaining_tokens', remainTok);
+        if (resetReq) await AsyncStorage.setItem('@padhai_groq_reset_requests', resetReq);
+        if (resetTok) await AsyncStorage.setItem('@padhai_groq_reset_tokens', resetTok);
+        await AsyncStorage.setItem('@padhai_groq_limits_last_updated', String(Date.now()));
+      } catch (err) {
+        console.warn("[ModelManager] Failed to save Groq rate limit headers:", err);
+      }
+
+      const respAny = response as any;
+      if (respAny.body && typeof respAny.body.getReader === 'function') {
+        const reader = respAny.body.getReader();
+        const decoder = new (globalThis as any).TextDecoder();
+
+        while (true) {
+          if (signal?.aborted) {
+            reader.cancel();
+            throw new Error('AbortError');
+          }
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = typeof value === 'string' ? value : decoder.decode(value, { stream: true });
+          await processSSEChunk(chunk);
+        }
+
+        if (sseBuffer.trim()) await processSSEChunk('\n');
+      } else {
+        const rawText = await response.text();
+        if (rawText.includes('data: ')) {
+          await processSSEChunk(rawText + '\n');
+        } else {
+          const j = JSON.parse(rawText);
+          const choice = j.choices?.[0];
+          if (choice?.message?.tool_calls) {
+            for (const tc of choice.message.tool_calls) {
+              accumulatedToolCalls.push(tc);
+            }
+          }
+          fullText = choice?.message?.content ?? '';
+          if (fullText) {
+            onToken(fullText);
+          }
+        }
+      }
+
+      // Filter accumulatedToolCalls to remove empty/incomplete elements
+      const validToolCalls = accumulatedToolCalls.filter(tc => tc && tc.function && tc.function.name);
+
+      // Estimate input tokens
+      let textLength = 0;
+      for (const msg of finalMessages) {
+        if (msg.content) textLength += msg.content.length;
+        if (msg.name) textLength += msg.name.length;
+        if (msg.tool_calls) {
+          textLength += JSON.stringify(msg.tool_calls).length;
+        }
+      }
+      let inputTokens = Math.ceil(textLength / 4);
+      if (includeTools) {
+        inputTokens += 250; // extra overhead for tools
+      }
+
+      // Estimate output tokens
+      let toolCallsText = '';
+      for (const tc of validToolCalls) {
+        if (tc.function) {
+          toolCallsText += (tc.function.name || '') + (tc.function.arguments || '');
+        }
+      }
+      const outputTokens = Math.ceil((fullText.length + toolCallsText.length) / 4);
+      const totalTokens = inputTokens + outputTokens;
+
+      try {
+        const currentUsedRaw = await AsyncStorage.getItem('@padhai_groq_tokens_used');
+        const currentUsed = currentUsedRaw ? parseInt(currentUsedRaw, 10) || 0 : 0;
+        await AsyncStorage.setItem('@padhai_groq_tokens_used', String(currentUsed + totalTokens));
+        console.log(`[ModelManager] Groq cloud token usage tracked: input=${inputTokens}, output=${outputTokens}, total=${totalTokens}. Accumulated: ${currentUsed + totalTokens}`);
+      } catch (e) {
+        console.warn("[ModelManager] Failed to update @padhai_groq_tokens_used:", e);
+      }
+
+      if (validToolCalls.length > 0) {
+        console.log('[ModelManager] 🛠️ Cloud inference executing tool calls:', validToolCalls);
+        const toolMessages: ChatMessage[] = [];
+
+        // Format tools correctly before sending them
+        const standardToolCalls = validToolCalls.map((tc, index) => ({
+          id: tc.id || `call_${index}`,
+          type: 'function' as const,
+          function: {
+            name: tc.function.name,
+            arguments: tc.function.arguments || '{}'
+          }
+        }));
+
+        for (const call of standardToolCalls) {
+          const result = await this.executeTool(call);
+          toolMessages.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            name: call.function.name,
+            content: typeof result === 'string' ? result : JSON.stringify(result)
+          });
+        }
+
+        // Recurse with tool results
+        return await this._streamChatCloud(
+          [
+            ...messages,
+            { role: 'assistant', content: fullText || null, tool_calls: standardToolCalls },
+            ...toolMessages
+          ],
+          onToken,
+          localConfig,
+          signal,
+          priority,
+          maxOutputTokensOverride,
+          includeTools,
+          caveman
+        );
+      }
+
+      return fullText;
+
+    } finally {
+      clearTimeout(fetchTimeout);
+      if (signal) signal.removeEventListener('abort', abortHandler);
+      this.activeControllers.delete(activeItem);
+    }
+  }
+
   private convertMessagesToPrompt(messages: ChatMessage[]): string {
     let prompt = '';
     
@@ -1010,6 +1379,95 @@ class ModelManagerService {
     console.log(`[ModelManager] Prompt length: ${prompt.length} chars, turns: ${nonSystemMessages.length}`);
     
     return prompt;
+  }
+
+  public async fetchGroqLimitsAndModels(apiKey: string, skipDummyFallback = false): Promise<{
+    models: any[];
+    limits: {
+      limitRequests: number;
+      remainingRequests: number;
+      limitTokens: number;
+      remainingTokens: number;
+      resetRequests: string;
+      resetTokens: string;
+    } | null;
+  }> {
+    try {
+      console.log("[ModelManager] Fetching models list from Groq API...");
+      const response = await fetch('https://api.groq.com/openai/v1/models', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch models from Groq: ${response.status}`);
+      }
+      
+      const json = await response.json();
+      const models = json.data || [];
+      
+      let limitReq = response.headers.get('x-ratelimit-limit-requests');
+      let remainReq = response.headers.get('x-ratelimit-remaining-requests');
+      let limitTok = response.headers.get('x-ratelimit-limit-tokens');
+      let remainTok = response.headers.get('x-ratelimit-remaining-tokens');
+      let resetReq = response.headers.get('x-ratelimit-reset-requests');
+      let resetTok = response.headers.get('x-ratelimit-reset-tokens');
+      
+      // Fallback to dummy completion if limits are not provided on GET /v1/models
+      if (!limitReq && !limitTok && !skipDummyFallback) {
+        console.log("[ModelManager] Rate limits not in models response. Fetching via dummy chat completion...");
+        try {
+          const dummyResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+              model: models.length > 0 ? models[0].id : 'llama-3.3-70b-versatile',
+              messages: [{ role: 'user', content: 'h' }],
+              max_tokens: 1
+            })
+          });
+          limitReq = dummyResponse.headers.get('x-ratelimit-limit-requests');
+          remainReq = dummyResponse.headers.get('x-ratelimit-remaining-requests');
+          limitTok = dummyResponse.headers.get('x-ratelimit-limit-tokens');
+          remainTok = dummyResponse.headers.get('x-ratelimit-remaining-tokens');
+          resetReq = dummyResponse.headers.get('x-ratelimit-reset-requests');
+          resetTok = dummyResponse.headers.get('x-ratelimit-reset-tokens');
+        } catch (dummyErr) {
+          console.warn("[ModelManager] Dummy chat completion rate limit check failed:", dummyErr);
+        }
+      }
+      
+      let limits = null;
+      if (limitReq || limitTok) {
+        limits = {
+          limitRequests: limitReq ? parseInt(limitReq, 10) : 0,
+          remainingRequests: remainReq ? parseInt(remainReq, 10) : 0,
+          limitTokens: limitTok ? parseInt(limitTok, 10) : 0,
+          remainingTokens: remainTok ? parseInt(remainTok, 10) : 0,
+          resetRequests: resetReq || '',
+          resetTokens: resetTok || '',
+        };
+        
+        if (limitReq) await AsyncStorage.setItem('@padhai_groq_limit_requests', limitReq);
+        if (remainReq) await AsyncStorage.setItem('@padhai_groq_remaining_requests', remainReq);
+        if (limitTok) await AsyncStorage.setItem('@padhai_groq_limit_tokens', limitTok);
+        if (remainTok) await AsyncStorage.setItem('@padhai_groq_remaining_tokens', remainTok);
+        if (resetReq) await AsyncStorage.setItem('@padhai_groq_reset_requests', resetReq);
+        if (resetTok) await AsyncStorage.setItem('@padhai_groq_reset_tokens', resetTok);
+        await AsyncStorage.setItem('@padhai_groq_limits_last_updated', String(Date.now()));
+      }
+      
+      await AsyncStorage.setItem('@padhai_groq_fetched_models', JSON.stringify(models));
+      return { models, limits };
+    } catch (e) {
+      console.error("[ModelManager] Error fetching Groq limits/models:", e);
+      throw e;
+    }
   }
 }
 

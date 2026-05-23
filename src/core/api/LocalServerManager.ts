@@ -33,6 +33,9 @@ export interface LocalServerConfig {
   extendedThinking: boolean;
   serverMode: ServerMode;
   topP: number;
+  useCloud: boolean;
+  cloudApiKey: string;
+  cloudModelId: string;
 }
 
 export class LocalServerManager {
@@ -179,6 +182,9 @@ export class LocalServerManager {
       extendedThinking: true,
       serverMode: 'auto_sleep',
       topP: 0.95,
+      useCloud: false,
+      cloudApiKey: '',
+      cloudModelId: 'llama-3.3-70b-versatile',
     };
     try {
       const raw = await AsyncStorage.getItem(this.STORAGE_KEY);
@@ -278,6 +284,33 @@ export class LocalServerManager {
       return await PadhModelDownloader.getModelPath(filename);
     } catch {
       return "";
+    }
+  }
+
+  static async listLocalModels(): Promise<string[]> {
+    try {
+      if (!PadhModelDownloader) return [];
+      return await PadhModelDownloader.listLocalModels();
+    } catch {
+      return [];
+    }
+  }
+
+  static async hasManageExternalStoragePermission(): Promise<boolean> {
+    try {
+      if (!PadhModelDownloader) return true;
+      return await PadhModelDownloader.hasManageExternalStoragePermission();
+    } catch {
+      return true;
+    }
+  }
+
+  static async requestManageExternalStoragePermission(): Promise<boolean> {
+    try {
+      if (!PadhModelDownloader) return true;
+      return await PadhModelDownloader.requestManageExternalStoragePermission();
+    } catch {
+      return false;
     }
   }
 

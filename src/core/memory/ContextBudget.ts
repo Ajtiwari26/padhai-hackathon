@@ -173,7 +173,7 @@ export class ContextBudgetManager {
       const msgTokens = this.estimateTokens(truncatedContent);
       if (availableTokens >= msgTokens) {
         historyToAdd.push({
-          role: msg.role as 'user' | 'assistant',
+          role: msg.role === 'ai' ? 'assistant' : 'user',
           content: truncatedContent,
         });
         availableTokens -= msgTokens;

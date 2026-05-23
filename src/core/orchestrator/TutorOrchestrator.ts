@@ -87,13 +87,11 @@ class TutorOrchestratorService {
 
     const processedHistory = await ContextWindow.buildContext(chatMessages, this.state.activeTopic);
 
-    // Periodic Memory Condensation (every 10 messages)
-    if (chatMessages.length > 0 && chatMessages.length % 10 === 0) {
-      console.log('[Orchestrator] Triggering periodic MemoryCondenser...');
-      MemoryCondenser.generateSessionCheatsheet(this.state.activeTopic, chatMessages).catch(e => 
-        console.error('[Orchestrator] Failed to generate periodic cheatsheet:', e)
-      );
-    }
+    // NOTE: Periodic background memory condensation has been removed.
+    // Running LLM summarization in the background during active chat on the same topic is redundant 
+    // and causes concurrent inference requests that crash the LiteRT engine and overheat the device.
+    // Cheatsheets are generated safely when transitioning between topics.
+
 
     // Add user message to KVCache
     KVCache.addMessage({

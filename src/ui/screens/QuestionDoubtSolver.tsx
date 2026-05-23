@@ -17,6 +17,7 @@ export const QuestionDoubtSolver: React.FC<{ route: any, navigation: any }> = ({
     // Initial prompt
     const initialMsg = `I got this question wrong: \n\n"${question.problem}"\n\nI answered "${question.studentAnswer}", but the correct answer is "${question.correctAnswer}".\n\nCan you explain how to solve this?`;
     handleSend(initialMsg, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSend = async (text: string, isInitial = false) => {
@@ -58,11 +59,16 @@ RULES:
         (token: string) => {
           fullResponse += token;
           // Could update state here if we wanted streaming
-        }
+        },
+        undefined,
+        'foreground',
+        undefined,
+        512,
+        false
       );
 
       setMessages(prev => [...prev, { role: 'assistant', content: fullResponse }]);
-    } catch (e) {
+    } catch {
       setMessages(prev => [...prev, { role: 'assistant', content: "I'm having trouble connecting to my brain. Please make sure the engine is running." }]);
     } finally {
       setIsTyping(false);

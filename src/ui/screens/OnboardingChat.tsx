@@ -245,7 +245,12 @@ export const OnboardingChat: React.FC<Props> = ({ onComplete, onSkip }) => {
             });
             lastStreamUpdate.current = now;
           }
-        }
+        },
+        undefined,
+        'foreground',
+        undefined,
+        256,
+        false
       );
       
       // EventBus: Emit AI response event

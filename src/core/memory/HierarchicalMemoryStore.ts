@@ -369,6 +369,10 @@ class HierarchicalMemoryStoreService {
    */
   async searchContent(query: string, limit: number = 5): Promise<MemoryNode[]> {
     if (!this.isNativeAvailable) return [];
+    if (!query || typeof query !== 'string' || !query.trim()) {
+      console.warn('[HierarchicalStore] searchContent received empty or invalid query:', query);
+      return [];
+    }
     try {
       return await PadhVectorDB.searchContent(query, limit);
     } catch (e) {
